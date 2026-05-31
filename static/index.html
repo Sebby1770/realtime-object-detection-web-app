@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Real-Time Object Detection</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script defer src="/static/app.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">YOLOv8 webcam stream</p>
+          <h1>Object Detection Live</h1>
+        </div>
+        <div class="status-pill" id="connectionStatus">
+          <span class="status-dot"></span>
+          <span>Offline</span>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <div class="stage-panel">
+          <div class="video-stage" id="videoStage">
+            <video id="video" autoplay playsinline muted></video>
+            <canvas id="overlay"></canvas>
+            <div class="empty-state" id="emptyState">
+              <button class="primary-button" id="startCamera">
+                <i data-lucide="video"></i>
+                <span>Start camera</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="control-panel">
+          <div class="button-row">
+            <button class="primary-button" id="startCameraSide">
+              <i data-lucide="play"></i>
+              <span>Start</span>
+            </button>
+            <button class="ghost-button" id="stopCamera" disabled>
+              <i data-lucide="square"></i>
+              <span>Stop</span>
+            </button>
+          </div>
+
+          <div class="control-group">
+            <label for="fpsRange">Frame rate</label>
+            <div class="range-row">
+              <input id="fpsRange" type="range" min="1" max="12" value="6" />
+              <output id="fpsValue">6 fps</output>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <label for="widthRange">Processing width</label>
+            <div class="range-row">
+              <input id="widthRange" type="range" min="320" max="960" step="80" value="640" />
+              <output id="widthValue">640 px</output>
+            </div>
+          </div>
+
+          <label class="toggle-row" for="labelToggle">
+            <input id="labelToggle" type="checkbox" checked />
+            <span>Show labels</span>
+          </label>
+
+          <div class="stats-grid">
+            <div class="stat">
+              <span>Objects</span>
+              <strong id="objectCount">0</strong>
+            </div>
+            <div class="stat">
+              <span>Latency</span>
+              <strong id="latency">--</strong>
+            </div>
+            <div class="stat">
+              <span>Stream</span>
+              <strong id="streamFps">--</strong>
+            </div>
+            <div class="stat">
+              <span>Model</span>
+              <strong>YOLOv8n</strong>
+            </div>
+          </div>
+
+          <div class="detections">
+            <div class="detections-head">
+              <h2>Detections</h2>
+              <span id="lastUpdated">Idle</span>
+            </div>
+            <ul id="detectionList"></ul>
+          </div>
+        </aside>
+      </section>
+
+      <canvas id="captureCanvas" aria-hidden="true"></canvas>
+    </main>
+  </body>
+</html>
+
