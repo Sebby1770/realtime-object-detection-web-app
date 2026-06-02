@@ -37,6 +37,10 @@ Environment variables:
 YOLO_MODEL=yolov8n.pt
 YOLO_CONFIDENCE=0.35
 YOLO_IMAGE_SIZE=640
+WS_ALLOWED_ORIGINS=http://127.0.0.1:8000,http://localhost:8000
+MAX_FRAME_BYTES=524288
+MIN_FRAME_INTERVAL_SECONDS=0.08
+MAX_WS_CONNECTIONS=4
 ```
 
 Example:
@@ -48,6 +52,13 @@ YOLO_CONFIDENCE=0.5 uvicorn app.main:app --reload
 ## Notes
 
 - Webcam access requires a secure origin. `localhost` and `127.0.0.1` are treated as secure by modern browsers.
+- The WebSocket rejects untrusted origins, oversized frames, excessive frame rates, and too many concurrent clients.
 - For smoother realtime performance on CPU, lower the processing width or frame rate in the sidebar.
 - For stronger accuracy, set `YOLO_MODEL` to a larger YOLOv8 model such as `yolov8s.pt`, understanding that latency will increase.
 
+## Development checks
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```

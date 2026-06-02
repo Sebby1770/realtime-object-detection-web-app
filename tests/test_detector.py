@@ -1,7 +1,9 @@
 import cv2
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
+from app import main
 from app.detector import _class_name, decode_jpeg
 
 
@@ -26,3 +28,31 @@ def test_class_name_handles_dict_and_sequence() -> None:
     assert _class_name(["person", "bicycle"], 1) == "bicycle"
     assert _class_name([], 99) == "99"
 
+
+def test_websocket_rejects_untrusted_origin() -> None:
+    client = TestClient(main.app)
+
+    with pytest.raises(Exception):
+        with client.websocket_connect(
+            "/ws/detect",
+            headers={"origin": "https://evil.example"},
+        ):
+            pass
+
+
+def test_websocket_rejects_large_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(main, "MAX_FRAME_BYTES", 4)
+    monkeypatch.setattr(main, "MIN_FRAME_INTERVAL_SECONDS", 0)
+    client = TestClient(main.app)
+
+    with client.websocket_connect(
+        "/ws/detect",
+        headers={"origin": "http://127.0.0.1:8000"},
+    ) as websocket:
+        websocket.send_bytes(b"too-large")
+        message = websocket.receive_json()
+
+    assert message == {
+        "type": "error",
+        "message": "Frame is too large for processing.",
+    }

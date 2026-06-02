@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -12,6 +13,14 @@ from app.detector import detect_objects
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
+DEFAULT_ALLOWED_ORIGINS = {
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+}
+MAX_FRAME_BYTES = int(os.getenv("MAX_FRAME_BYTES", str(512 * 1024)))
+MIN_FRAME_INTERVAL_SECONDS = float(os.getenv("MIN_FRAME_INTERVAL_SECONDS", "0.08"))
+MAX_WS_CONNECTIONS = int(os.getenv("MAX_WS_CONNECTIONS", "4"))
+ACTIVE_CONNECTIONS = 0
 
 app = FastAPI(
     title="Real-Time Object Detection",
@@ -32,9 +41,35 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def allowed_origins() -> set[str]:
+    configured = os.getenv("WS_ALLOWED_ORIGINS", "")
+    if not configured:
+        return DEFAULT_ALLOWED_ORIGINS
+    return {origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()}
+
+
+def is_allowed_origin(websocket: WebSocket) -> bool:
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return False
+    return origin.rstrip("/") in allowed_origins()
+
+
 @app.websocket("/ws/detect")
 async def detect_socket(websocket: WebSocket) -> None:
+    global ACTIVE_CONNECTIONS
+
+    if not is_allowed_origin(websocket):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    if ACTIVE_CONNECTIONS >= MAX_WS_CONNECTIONS:
+        await websocket.close(code=status.WS_1013_TRY_AGAIN_LATER)
+        return
+
     await websocket.accept()
+    ACTIVE_CONNECTIONS += 1
+    last_frame_at = 0.0
 
     try:
         while True:
@@ -42,6 +77,25 @@ async def detect_socket(websocket: WebSocket) -> None:
             started = time.perf_counter()
 
             try:
+                if len(frame) > MAX_FRAME_BYTES:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Frame is too large for processing.",
+                        }
+                    )
+                    continue
+
+                if started - last_frame_at < MIN_FRAME_INTERVAL_SECONDS:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Frame rate is too high.",
+                        }
+                    )
+                    continue
+                last_frame_at = started
+
                 payload = await detect_objects(frame)
                 payload["latency_ms"] = round(
                     (time.perf_counter() - started) * 1000,
@@ -52,9 +106,10 @@ async def detect_socket(websocket: WebSocket) -> None:
                 await websocket.send_json(
                     {
                         "type": "error",
-                        "message": str(exc),
+                        "message": "Unable to process this frame.",
                     }
                 )
     except WebSocketDisconnect:
         return
-
+    finally:
+        ACTIVE_CONNECTIONS = max(0, ACTIVE_CONNECTIONS - 1)
