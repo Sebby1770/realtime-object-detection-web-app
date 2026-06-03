@@ -102,13 +102,18 @@ async def detect_socket(websocket: WebSocket) -> None:
                     1,
                 )
                 await websocket.send_json(payload)
-            except Exception as exc:
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "message": "Unable to process this frame.",
-                    }
-                )
+            except WebSocketDisconnect:
+                raise
+            except Exception:
+                try:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": "Unable to process this frame.",
+                        }
+                    )
+                except WebSocketDisconnect:
+                    raise
     except WebSocketDisconnect:
         return
     finally:

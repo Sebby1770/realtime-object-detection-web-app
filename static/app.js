@@ -158,7 +158,7 @@ function stopDemoStream() {
   elements.video.style.display = "";
 }
 
-function createDemoStream(reason) {
+function createDemoStream() {
   stopDemoStream();
 
   const canvas = document.createElement("canvas");
@@ -173,7 +173,7 @@ function createDemoStream(reason) {
   state.demoTimer = window.setInterval(() => drawDemoFrame(canvas), 1000 / 12);
   state.demoCanvas = canvas;
   state.demoMode = true;
-  elements.lastUpdated.textContent = `Demo stream active - ${reason}`;
+  elements.lastUpdated.textContent = "Demo stream active";
 
   if (typeof canvas.captureStream === "function") {
     return canvas.captureStream(12);
@@ -242,7 +242,7 @@ async function startCamera() {
   stopDemoStream();
 
   const camera = await requestCameraStream();
-  state.stream = camera.stream || createDemoStream(camera.reason);
+  state.stream = camera.stream || createDemoStream();
 
   if (state.stream) {
     elements.video.srcObject = state.stream;
