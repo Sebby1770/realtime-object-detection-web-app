@@ -151,7 +151,8 @@ h1 {
 }
 
 #video,
-#overlay {
+#overlay,
+.demo-feed {
   position: absolute;
   inset: 0;
   display: block;
@@ -160,6 +161,10 @@ h1 {
 }
 
 #video {
+  object-fit: fill;
+}
+
+.demo-feed {
   object-fit: fill;
 }
 
@@ -388,4 +393,3 @@ output {
     grid-template-columns: 1fr;
   }
 }
-

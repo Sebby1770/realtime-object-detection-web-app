@@ -52,6 +52,7 @@ YOLO_CONFIDENCE=0.5 uvicorn app.main:app --reload
 ## Notes
 
 - Webcam access requires a secure origin. `localhost` and `127.0.0.1` are treated as secure by modern browsers.
+- If the browser blocks or does not expose camera access, the app falls back to a local demo video stream so the WebSocket and inference pipeline can still be exercised.
 - The WebSocket rejects untrusted origins, oversized frames, excessive frame rates, and too many concurrent clients.
 - For smoother realtime performance on CPU, lower the processing width or frame rate in the sidebar.
 - For stronger accuracy, set `YOLO_MODEL` to a larger YOLOv8 model such as `yolov8s.pt`, understanding that latency will increase.

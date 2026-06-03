@@ -23,6 +23,9 @@ const elements = {
 const state = {
   stream: null,
   socket: null,
+  demoCanvas: null,
+  demoTimer: null,
+  demoMode: false,
   running: false,
   inFlight: false,
   targetFps: Number(elements.fpsRange.value),
@@ -61,6 +64,122 @@ function setConnectionStatus(label, online = false) {
 function socketUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/ws/detect`;
+}
+
+async function requestCameraStream() {
+  const mediaDevices = globalThis.navigator?.mediaDevices;
+  if (!mediaDevices?.getUserMedia) {
+    return { stream: null, reason: "camera API unavailable" };
+  }
+
+  let timedOut = false;
+  const request = mediaDevices
+    .getUserMedia({
+      audio: false,
+      video: {
+        facingMode: "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    })
+    .then((stream) => {
+      if (timedOut) {
+        stream.getTracks().forEach((track) => track.stop());
+        return null;
+      }
+      return stream;
+    });
+
+  const timeout = new Promise((resolve) => {
+    window.setTimeout(() => {
+      timedOut = true;
+      resolve(null);
+    }, 2500);
+  });
+
+  try {
+    const stream = await Promise.race([request, timeout]);
+    return {
+      stream,
+      reason: stream ? "" : "camera permission timed out",
+    };
+  } catch (error) {
+    return {
+      stream: null,
+      reason: error?.message || "camera unavailable",
+    };
+  }
+}
+
+function drawDemoFrame(canvas) {
+  const context = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  const now = performance.now() / 1000;
+  const gradient = context.createLinearGradient(0, 0, width, height);
+
+  gradient.addColorStop(0, "#071111");
+  gradient.addColorStop(0.55, "#102724");
+  gradient.addColorStop(1, "#201313");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, width, height);
+
+  const orbX = width * (0.5 + Math.sin(now * 0.8) * 0.22);
+  const orbY = height * (0.45 + Math.cos(now * 0.7) * 0.18);
+  context.fillStyle = "#38d6c6";
+  context.beginPath();
+  context.arc(orbX, orbY, 56, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = "#ff6f59";
+  context.fillRect(width * 0.18, height * 0.58, 170, 108);
+  context.fillStyle = "#f5c84b";
+  context.fillRect(width * 0.68, height * 0.22, 120, 150);
+
+  context.fillStyle = "rgba(245, 241, 232, 0.9)";
+  context.font = "700 34px system-ui, sans-serif";
+  context.fillText("Demo video feed", 42, 66);
+  context.font = "500 20px system-ui, sans-serif";
+  context.fillText("Camera fallback is active", 42, 98);
+}
+
+function stopDemoStream() {
+  if (state.demoTimer) {
+    window.clearInterval(state.demoTimer);
+    state.demoTimer = null;
+  }
+
+  if (state.demoCanvas) {
+    state.demoCanvas.remove();
+    state.demoCanvas = null;
+  }
+
+  state.demoMode = false;
+  elements.video.style.display = "";
+}
+
+function createDemoStream(reason) {
+  stopDemoStream();
+
+  const canvas = document.createElement("canvas");
+  canvas.className = "demo-feed";
+  canvas.width = 960;
+  canvas.height = 540;
+  canvas.setAttribute("aria-label", "Demo video feed");
+  elements.videoStage.insertBefore(canvas, elements.overlay);
+  elements.video.style.display = "none";
+
+  drawDemoFrame(canvas);
+  state.demoTimer = window.setInterval(() => drawDemoFrame(canvas), 1000 / 12);
+  state.demoCanvas = canvas;
+  state.demoMode = true;
+  elements.lastUpdated.textContent = `Demo stream active - ${reason}`;
+
+  if (typeof canvas.captureStream === "function") {
+    return canvas.captureStream(12);
+  }
+
+  return null;
 }
 
 function connectSocket() {
@@ -120,25 +239,32 @@ async function startCamera() {
     return;
   }
 
-  state.stream = await navigator.mediaDevices.getUserMedia({
-    audio: false,
-    video: {
-      facingMode: "environment",
-      width: { ideal: 1280 },
-      height: { ideal: 720 },
-    },
-  });
+  stopDemoStream();
 
-  elements.video.srcObject = state.stream;
-  await elements.video.play();
+  const camera = await requestCameraStream();
+  state.stream = camera.stream || createDemoStream(camera.reason);
 
-  const ratio = `${elements.video.videoWidth} / ${elements.video.videoHeight}`;
+  if (state.stream) {
+    elements.video.srcObject = state.stream;
+    await elements.video.play().catch(() => {});
+  }
+
+  const sourceWidth = state.demoMode
+    ? state.demoCanvas.width
+    : elements.video.videoWidth || 1280;
+  const sourceHeight = state.demoMode
+    ? state.demoCanvas.height
+    : elements.video.videoHeight || 720;
+  const ratio = `${sourceWidth} / ${sourceHeight}`;
   elements.videoStage.style.aspectRatio = ratio;
 
   state.running = true;
   elements.emptyState.classList.add("hidden");
   elements.startCameraSide.disabled = true;
   elements.stopCamera.disabled = false;
+  if (!state.demoMode) {
+    elements.lastUpdated.textContent = "Camera connected";
+  }
 
   connectSocket();
   captureLoop();
@@ -157,6 +283,7 @@ function stopCamera() {
     state.stream.getTracks().forEach((track) => track.stop());
     state.stream = null;
   }
+  stopDemoStream();
 
   elements.video.srcObject = null;
   state.detections = [];
@@ -181,21 +308,25 @@ function captureLoop() {
 
   if (
     state.inFlight ||
-    state.socket?.readyState !== WebSocket.OPEN ||
-    elements.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+    state.socket?.readyState !== WebSocket.OPEN
   ) {
     return;
   }
 
-  const sourceWidth = elements.video.videoWidth;
-  const sourceHeight = elements.video.videoHeight;
+  if (!state.demoMode && elements.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    return;
+  }
+
+  const source = state.demoMode ? state.demoCanvas : elements.video;
+  const sourceWidth = state.demoMode ? source.width : source.videoWidth;
+  const sourceHeight = state.demoMode ? source.height : source.videoHeight;
   const width = Math.min(state.processingWidth, sourceWidth);
   const height = Math.round(width * (sourceHeight / sourceWidth));
   const canvas = elements.captureCanvas;
 
   canvas.width = width;
   canvas.height = height;
-  canvas.getContext("2d").drawImage(elements.video, 0, 0, width, height);
+  canvas.getContext("2d").drawImage(source, 0, 0, width, height);
 
   state.inFlight = true;
   canvas.toBlob(
