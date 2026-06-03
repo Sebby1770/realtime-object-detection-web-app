@@ -77,7 +77,7 @@ async function requestCameraStream() {
     .getUserMedia({
       audio: false,
       video: {
-        facingMode: "environment",
+        facingMode: { ideal: "user" },
         width: { ideal: 1280 },
         height: { ideal: 720 },
       },
