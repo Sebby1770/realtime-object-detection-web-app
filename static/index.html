@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Real-Time Object Detection</title>
-    <link rel="stylesheet" href="/static/styles.css?v=1.4.0" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.5.0" />
     <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    <script defer src="/static/app.js?v=1.4.0"></script>
+    <script defer src="/static/app.js?v=1.5.0"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -108,6 +108,26 @@
             <span>Light theme</span>
           </label>
 
+          <label class="toggle-row" for="privacyToggle">
+            <input id="privacyToggle" type="checkbox" />
+            <span>Privacy cloak (blur people)</span>
+          </label>
+
+          <label class="toggle-row" for="sonifyToggle">
+            <input id="sonifyToggle" type="checkbox" />
+            <span>Detection sonification</span>
+          </label>
+
+          <label class="toggle-row" for="ghostToggle">
+            <input id="ghostToggle" type="checkbox" checked />
+            <span>Ghost persistence</span>
+          </label>
+
+          <label class="toggle-row" for="spatialAudioToggle">
+            <input id="spatialAudioToggle" type="checkbox" checked />
+            <span>Spatial audio pings</span>
+          </label>
+
           <div class="control-group">
             <label for="uploadDetect">Detect image files</label>
             <input id="uploadDetect" type="file" accept="image/*" multiple />
@@ -193,6 +213,14 @@
               <span id="historyCount">0 events</span>
             </div>
             <ul id="historyList"></ul>
+          </div>
+
+          <div class="detections filmstrip-panel">
+            <div class="detections-head">
+              <h2>Alert filmstrip</h2>
+              <span id="filmstripCount">0 clips</span>
+            </div>
+            <div id="alertFilmstrip" class="alert-filmstrip"></div>
           </div>
 
           <div class="detections">

@@ -28,7 +28,7 @@ ACTIVE_CONNECTIONS = 0
 app = FastAPI(
     title="Real-Time Object Detection",
     description="FastAPI, WebSockets, OpenCV, and YOLOv8 live object detection.",
-    version="1.4.0",
+    version="1.5.0",
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -43,7 +43,7 @@ async def index() -> FileResponse:
 async def health() -> dict[str, str | int]:
     return {
         "status": "ok",
-        "version": "1.4.0",
+        "version": "1.5.0",
         "active_connections": ACTIVE_CONNECTIONS,
         "max_connections": MAX_WS_CONNECTIONS,
     }

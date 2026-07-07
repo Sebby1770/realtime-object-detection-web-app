@@ -59,7 +59,7 @@ def test_health_reports_version() -> None:
     client = TestClient(main.app)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["version"] == "1.4.0"
+    assert response.json()["version"] == "1.5.0"
 
 
 def test_run_detection_filters_by_class(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,6 +163,21 @@ def test_batch_detect_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = response.json()
     assert payload["count"] == 2
     assert len(payload["results"]) == 2
+
+
+def test_tracker_trail_payload_shape() -> None:
+    tracker = SimpleTracker(trail_length=3)
+    assigned = tracker.assign(
+        [
+            {
+                "label": "car",
+                "confidence": 0.8,
+                "box": {"x": 4, "y": 4, "width": 20, "height": 12},
+            }
+        ]
+    )
+    assert assigned[0]["trail"][0]["x"] == 14.0
+    assert assigned[0]["trail"][0]["y"] == 10.0
 
 
 def test_session_stats_endpoint() -> None:

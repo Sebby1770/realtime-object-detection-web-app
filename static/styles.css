@@ -13,6 +13,33 @@
   --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
 }
 
+.alert-filmstrip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.filmstrip-card {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+
+.filmstrip-card img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+
+.filmstrip-card figcaption {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 [data-theme="light"] {
   color-scheme: light;
   --bg: #f3f2ec;

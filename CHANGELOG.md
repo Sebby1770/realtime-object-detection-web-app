@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.0 — 2026-07-07
+
+### Added
+- **Privacy cloak** — blur detected people on the live overlay
+- **Detection sonification** — map object classes to musical tones
+- **Ghost persistence** — faded previous-frame boxes linger briefly
+- **Spatial audio pings** — stereo-panned tones on ROI alerts
+- **Alert filmstrip** — captures snapshot thumbnails when zones trigger
+
+### Improved
+- Tracker trails now expose `{x, y}` coordinate objects for rendering
+
 ## 1.4.0 — 2026-07-07
 
 ### Added

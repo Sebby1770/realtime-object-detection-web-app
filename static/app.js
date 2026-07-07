@@ -42,6 +42,12 @@ const elements = {
   trailToggle: document.querySelector("#trailToggle"),
   alertSoundToggle: document.querySelector("#alertSoundToggle"),
   themeToggle: document.querySelector("#themeToggle"),
+  privacyToggle: document.querySelector("#privacyToggle"),
+  sonifyToggle: document.querySelector("#sonifyToggle"),
+  ghostToggle: document.querySelector("#ghostToggle"),
+  spatialAudioToggle: document.querySelector("#spatialAudioToggle"),
+  alertFilmstrip: document.querySelector("#alertFilmstrip"),
+  filmstripCount: document.querySelector("#filmstripCount"),
   sessionFrames: document.querySelector("#sessionFrames"),
   sessionDetections: document.querySelector("#sessionDetections"),
   sessionClasses: document.querySelector("#sessionClasses"),
@@ -79,6 +85,12 @@ const state = {
   roiDrawing: false,
   roiStart: null,
   maxRois: 3,
+  privacyMode: false,
+  sonify: false,
+  ghostMode: true,
+  spatialAudio: true,
+  ghostDetections: [],
+  filmstrip: [],
   session: {
     frames_processed: 0,
     detections_total: 0,
@@ -277,8 +289,15 @@ function connectSocket() {
       return;
     }
 
+    if (state.ghostMode && state.detections.length) {
+      state.ghostDetections = state.detections.map((item) => ({
+        ...item,
+        box: { ...item.box },
+      }));
+    }
     state.detections = payload.detections ?? [];
     state.classCounts = payload.class_counts ?? {};
+    sonifyDetections(state.detections);
     recordHistory(payload);
     updateHeatmap(payload.detections ?? []);
     recordLatency(payload.latency_ms);
@@ -396,6 +415,94 @@ function pointInRoi(x, y, roi, frameWidth, frameHeight) {
 }
 
 const ROI_COLORS = ["rgba(245, 200, 75, 0.9)", "rgba(56, 214, 198, 0.9)", "rgba(255, 111, 89, 0.9)"];
+const SONIFY_NOTES = {
+  person: 261.63,
+  bicycle: 293.66,
+  car: 329.63,
+  dog: 349.23,
+  cat: 392.0,
+  default: 440.0,
+};
+const PRIVACY_LABELS = new Set(["person"]);
+
+function noteForLabel(label) {
+  return SONIFY_NOTES[label] ?? SONIFY_NOTES.default;
+}
+
+function playSpatialPing(detection) {
+  if (!state.spatialAudio) return;
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  const context = new AudioContext();
+  const oscillator = context.createOscillator();
+  const panner = context.createStereoPanner();
+  const gain = context.createGain();
+  const centerX = detection.box.x + detection.box.width / 2;
+  const pan = (centerX / Math.max(1, state.frameSize.width)) * 2 - 1;
+  oscillator.frequency.value = noteForLabel(detection.label);
+  gain.gain.value = 0.03;
+  panner.pan.value = Math.max(-1, Math.min(1, pan));
+  oscillator.connect(gain);
+  gain.connect(panner);
+  panner.connect(context.destination);
+  oscillator.start();
+  oscillator.stop(context.currentTime + 0.08);
+  oscillator.onended = () => context.close();
+}
+
+function sonifyDetections(detections) {
+  if (!state.sonify || !detections.length) return;
+  const top = detections[0];
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  const context = new AudioContext();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = "triangle";
+  oscillator.frequency.value = noteForLabel(top.label);
+  gain.gain.value = 0.025;
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start();
+  oscillator.stop(context.currentTime + 0.1);
+  oscillator.onended = () => context.close();
+}
+
+function captureFilmstripFrame(label) {
+  const { width, height } = resizeOverlay();
+  const source = state.demoMode ? state.demoCanvas : elements.video;
+  if (!source) return;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.drawImage(source, 0, 0, width, height);
+  context.drawImage(elements.overlay, 0, 0, width, height);
+  const entry = {
+    label,
+    dataUrl: canvas.toDataURL("image/jpeg", 0.65),
+    stamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+  };
+  state.filmstrip = [entry, ...state.filmstrip].slice(0, 8);
+  renderFilmstrip();
+}
+
+function renderFilmstrip() {
+  elements.filmstripCount.textContent = `${state.filmstrip.length} clips`;
+  elements.alertFilmstrip.replaceChildren(
+    ...state.filmstrip.map((clip) => {
+      const card = document.createElement("figure");
+      card.className = "filmstrip-card";
+      const image = document.createElement("img");
+      image.src = clip.dataUrl;
+      image.alt = `ROI alert ${clip.label}`;
+      const caption = document.createElement("figcaption");
+      caption.textContent = `${clip.stamp} · ${clip.label}`;
+      card.append(image, caption);
+      return card;
+    }),
+  );
+}
 
 function playAlertTone() {
   if (!state.alertSound) return;
@@ -427,6 +534,8 @@ function checkRoiAlerts(detections) {
         elements.roiAlerts.textContent = String(state.session.roi_alerts);
         elements.roiStatus.textContent = `Alert: ${detection.label} entered zone ${index + 1}`;
         playAlertTone();
+        playSpatialPing(detection);
+        captureFilmstripFrame(detection.label);
         return;
       }
     }
@@ -626,6 +735,10 @@ function saveSettings() {
       selectedClasses: state.selectedClasses,
       showTrails: state.showTrails,
       alertSound: state.alertSound,
+      privacyMode: state.privacyMode,
+      sonify: state.sonify,
+      ghostMode: state.ghostMode,
+      spatialAudio: state.spatialAudio,
     }),
   );
 }
@@ -666,6 +779,22 @@ function loadSettings() {
     if (saved.alertSound != null) {
       state.alertSound = saved.alertSound;
       elements.alertSoundToggle.checked = saved.alertSound;
+    }
+    if (saved.privacyMode != null) {
+      state.privacyMode = saved.privacyMode;
+      elements.privacyToggle.checked = saved.privacyMode;
+    }
+    if (saved.sonify != null) {
+      state.sonify = saved.sonify;
+      elements.sonifyToggle.checked = saved.sonify;
+    }
+    if (saved.ghostMode != null) {
+      state.ghostMode = saved.ghostMode;
+      elements.ghostToggle.checked = saved.ghostMode;
+    }
+    if (saved.spatialAudio != null) {
+      state.spatialAudio = saved.spatialAudio;
+      elements.spatialAudioToggle.checked = saved.spatialAudio;
     }
   } catch {
     // ignore invalid saved settings
@@ -853,13 +982,35 @@ function drawOverlay() {
     context.fillText(`Z${index + 1}`, roiX + 6, roiY + 16);
   });
 
-  for (const detection of state.detections) {
+  const drawDetection = (detection, alpha = 1) => {
     const box = detection.box;
     const x = box.x * xScale;
     const y = box.y * yScale;
     const boxWidth = box.width * xScale;
     const boxHeight = box.height * yScale;
     const color = colorForLabel(detection.label);
+    context.globalAlpha = alpha;
+
+    if (state.privacyMode && PRIVACY_LABELS.has(detection.label)) {
+      context.save();
+      context.beginPath();
+      context.rect(x, y, boxWidth, boxHeight);
+      context.clip();
+      context.filter = "blur(14px)";
+      const source = state.demoMode ? state.demoCanvas : elements.video;
+      if (source) {
+        context.drawImage(source, 0, 0, width, height);
+      } else {
+        context.fillStyle = "rgba(7, 17, 17, 0.75)";
+        context.fillRect(x, y, boxWidth, boxHeight);
+      }
+      context.restore();
+      context.globalAlpha = alpha;
+      context.strokeStyle = color;
+      context.strokeRect(x, y, boxWidth, boxHeight);
+      context.globalAlpha = 1;
+      return;
+    }
 
     if (state.showTrails && detection.trail?.length > 1) {
       context.strokeStyle = alphaColor(color, 0.55);
@@ -896,8 +1047,13 @@ function drawOverlay() {
       context.fillStyle = "#071111";
       context.fillText(label, x + 8, labelY + 16);
     }
-  }
+    context.globalAlpha = 1;
+  };
 
+  if (state.ghostMode) {
+    state.ghostDetections.forEach((detection) => drawDetection(detection, 0.28));
+  }
+  state.detections.forEach((detection) => drawDetection(detection, 1));
 }
 
 function renderDetectionList() {
@@ -1006,6 +1162,26 @@ elements.alertSoundToggle.addEventListener("change", (event) => {
 
 elements.themeToggle.addEventListener("change", (event) => {
   applyTheme(event.target.checked);
+});
+
+elements.privacyToggle.addEventListener("change", (event) => {
+  state.privacyMode = event.target.checked;
+  saveSettings();
+});
+
+elements.sonifyToggle.addEventListener("change", (event) => {
+  state.sonify = event.target.checked;
+  saveSettings();
+});
+
+elements.ghostToggle.addEventListener("change", (event) => {
+  state.ghostMode = event.target.checked;
+  saveSettings();
+});
+
+elements.spatialAudioToggle.addEventListener("change", (event) => {
+  state.spatialAudio = event.target.checked;
+  saveSettings();
 });
 
 elements.overlay.addEventListener("pointerdown", (event) => {
