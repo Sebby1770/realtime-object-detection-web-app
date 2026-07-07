@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.6.0 — 2026-07-07
+
+### Added
+- **Proximity radar** — polar blip map of detection centers
+- **Detection density chart** — rolling bar chart of object counts per frame
+- **Filmstrip HTML export** — download ROI alert gallery as standalone page
+- **Privacy blur strength** and **ghost fade** sliders
+
+### Improved
+- Sonification now plays up to 3-note chords when multiple objects are present
+- Ghost overlay opacity is configurable (8%–55%)
+
 ## 1.5.0 — 2026-07-07
 
 ### Added

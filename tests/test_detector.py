@@ -59,7 +59,7 @@ def test_health_reports_version() -> None:
     client = TestClient(main.app)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["version"] == "1.5.0"
+    assert response.json()["version"] == "1.6.0"
 
 
 def test_run_detection_filters_by_class(monkeypatch: pytest.MonkeyPatch) -> None:

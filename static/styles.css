@@ -40,6 +40,18 @@
   font-size: 0.72rem;
 }
 
+.radar-panel {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+
+#proximityRadar {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #101012;
+}
+
 [data-theme="light"] {
   color-scheme: light;
   --bg: #f3f2ec;

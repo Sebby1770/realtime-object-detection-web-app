@@ -48,6 +48,15 @@ const elements = {
   spatialAudioToggle: document.querySelector("#spatialAudioToggle"),
   alertFilmstrip: document.querySelector("#alertFilmstrip"),
   filmstripCount: document.querySelector("#filmstripCount"),
+  exportFilmstrip: document.querySelector("#exportFilmstrip"),
+  densityChart: document.querySelector("#densityChart"),
+  densityAvg: document.querySelector("#densityAvg"),
+  proximityRadar: document.querySelector("#proximityRadar"),
+  radarCount: document.querySelector("#radarCount"),
+  privacyBlurRange: document.querySelector("#privacyBlurRange"),
+  privacyBlurValue: document.querySelector("#privacyBlurValue"),
+  ghostOpacityRange: document.querySelector("#ghostOpacityRange"),
+  ghostOpacityValue: document.querySelector("#ghostOpacityValue"),
   sessionFrames: document.querySelector("#sessionFrames"),
   sessionDetections: document.querySelector("#sessionDetections"),
   sessionClasses: document.querySelector("#sessionClasses"),
@@ -89,8 +98,12 @@ const state = {
   sonify: false,
   ghostMode: true,
   spatialAudio: true,
+  privacyBlur: 14,
+  ghostOpacity: 0.28,
+  sonifyChord: true,
   ghostDetections: [],
   filmstrip: [],
+  densitySamples: [],
   session: {
     frames_processed: 0,
     detections_total: 0,
@@ -298,6 +311,7 @@ function connectSocket() {
     state.detections = payload.detections ?? [];
     state.classCounts = payload.class_counts ?? {};
     sonifyDetections(state.detections);
+    recordDensity(state.detections.length);
     recordHistory(payload);
     updateHeatmap(payload.detections ?? []);
     recordLatency(payload.latency_ms);
@@ -452,20 +466,102 @@ function playSpatialPing(detection) {
 
 function sonifyDetections(detections) {
   if (!state.sonify || !detections.length) return;
-  const top = detections[0];
   const AudioContext = window.AudioContext || window.webkitAudioContext;
   if (!AudioContext) return;
   const context = new AudioContext();
-  const oscillator = context.createOscillator();
-  const gain = context.createGain();
-  oscillator.type = "triangle";
-  oscillator.frequency.value = noteForLabel(top.label);
-  gain.gain.value = 0.025;
-  oscillator.connect(gain);
-  gain.connect(context.destination);
-  oscillator.start();
-  oscillator.stop(context.currentTime + 0.1);
-  oscillator.onended = () => context.close();
+  const master = context.createGain();
+  master.gain.value = 0.02;
+  master.connect(context.destination);
+  const voices = state.sonifyChord
+    ? detections.slice(0, 3)
+    : detections.slice(0, 1);
+  voices.forEach((detection, index) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = index === 0 ? "triangle" : "sine";
+    oscillator.frequency.value = noteForLabel(detection.label) * (1 + index * 0.04);
+    gain.gain.value = 0.9 / voices.length;
+    oscillator.connect(gain);
+    gain.connect(master);
+    oscillator.start(context.currentTime + index * 0.03);
+    oscillator.stop(context.currentTime + 0.12 + index * 0.03);
+    oscillator.onended = () => {
+      if (index === voices.length - 1) context.close();
+    };
+  });
+}
+
+function recordDensity(count) {
+  state.densitySamples = [...state.densitySamples, count].slice(-24);
+  const average = state.densitySamples.reduce((sum, item) => sum + item, 0) / state.densitySamples.length;
+  elements.densityAvg.textContent = `${average.toFixed(1)} avg`;
+  drawDensityChart();
+}
+
+function drawDensityChart() {
+  const canvas = elements.densityChart;
+  const context = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#101012";
+  context.fillRect(0, 0, width, height);
+  if (!state.densitySamples.length) return;
+  const max = Math.max(...state.densitySamples, 1);
+  context.fillStyle = "#7bd88f";
+  state.densitySamples.forEach((sample, index) => {
+    const barWidth = (width - 8) / state.densitySamples.length;
+    const x = 4 + index * barWidth;
+    const barHeight = (sample / max) * (height - 8);
+    context.fillRect(x, height - 4 - barHeight, Math.max(2, barWidth - 2), barHeight);
+  });
+}
+
+function drawProximityRadar() {
+  const canvas = elements.proximityRadar;
+  const context = canvas.getContext("2d");
+  const size = canvas.width;
+  const center = size / 2;
+  const radius = size * 0.42;
+  context.clearRect(0, 0, size, size);
+  context.fillStyle = "#101012";
+  context.fillRect(0, 0, size, size);
+  context.strokeStyle = "rgba(56, 214, 198, 0.25)";
+  for (let ring = 1; ring <= 3; ring += 1) {
+    context.beginPath();
+    context.arc(center, center, (radius * ring) / 3, 0, Math.PI * 2);
+    context.stroke();
+  }
+  state.detections.forEach((detection) => {
+    const box = detection.box;
+    const x = center + ((box.x + box.width / 2) / state.frameSize.width - 0.5) * radius * 2;
+    const y = center + ((box.y + box.height / 2) / state.frameSize.height - 0.5) * radius * 2;
+    context.fillStyle = colorForLabel(detection.label);
+    context.beginPath();
+    context.arc(x, y, 4 + detection.confidence * 4, 0, Math.PI * 2);
+    context.fill();
+  });
+  elements.radarCount.textContent = `${state.detections.length} blips`;
+}
+
+function exportFilmstripGallery() {
+  if (!state.filmstrip.length) return;
+  const cards = state.filmstrip
+    .map(
+      (clip) => `
+        <figure style="margin:0;border:1px solid #303037;border-radius:8px;overflow:hidden;">
+          <img src="${clip.dataUrl}" alt="${clip.label}" style="width:100%;display:block;">
+          <figcaption style="padding:8px;font:12px sans-serif;color:#a9a49a;">${clip.stamp} · ${clip.label}</figcaption>
+        </figure>
+      `,
+    )
+    .join("");
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>ROI Alert Gallery</title></head><body style="background:#0b0b0d;color:#f5f1e8;font-family:sans-serif;padding:24px;"><h1>ROI Alert Gallery</h1><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">${cards}</div></body></html>`;
+  const link = document.createElement("a");
+  link.download = `roi-gallery-${Date.now()}.html`;
+  link.href = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 
 function captureFilmstripFrame(label) {
@@ -489,6 +585,7 @@ function captureFilmstripFrame(label) {
 
 function renderFilmstrip() {
   elements.filmstripCount.textContent = `${state.filmstrip.length} clips`;
+  elements.exportFilmstrip.disabled = state.filmstrip.length === 0;
   elements.alertFilmstrip.replaceChildren(
     ...state.filmstrip.map((clip) => {
       const card = document.createElement("figure");
@@ -739,6 +836,8 @@ function saveSettings() {
       sonify: state.sonify,
       ghostMode: state.ghostMode,
       spatialAudio: state.spatialAudio,
+      privacyBlur: state.privacyBlur,
+      ghostOpacity: state.ghostOpacity,
     }),
   );
 }
@@ -795,6 +894,16 @@ function loadSettings() {
     if (saved.spatialAudio != null) {
       state.spatialAudio = saved.spatialAudio;
       elements.spatialAudioToggle.checked = saved.spatialAudio;
+    }
+    if (saved.privacyBlur != null) {
+      state.privacyBlur = saved.privacyBlur;
+      elements.privacyBlurRange.value = String(saved.privacyBlur);
+      elements.privacyBlurValue.textContent = `${saved.privacyBlur}px`;
+    }
+    if (saved.ghostOpacity != null) {
+      state.ghostOpacity = saved.ghostOpacity;
+      elements.ghostOpacityRange.value = String(saved.ghostOpacity);
+      elements.ghostOpacityValue.textContent = `${Math.round(saved.ghostOpacity * 100)}%`;
     }
   } catch {
     // ignore invalid saved settings
@@ -996,7 +1105,7 @@ function drawOverlay() {
       context.beginPath();
       context.rect(x, y, boxWidth, boxHeight);
       context.clip();
-      context.filter = "blur(14px)";
+      context.filter = `blur(${state.privacyBlur}px)`;
       const source = state.demoMode ? state.demoCanvas : elements.video;
       if (source) {
         context.drawImage(source, 0, 0, width, height);
@@ -1051,7 +1160,7 @@ function drawOverlay() {
   };
 
   if (state.ghostMode) {
-    state.ghostDetections.forEach((detection) => drawDetection(detection, 0.28));
+    state.ghostDetections.forEach((detection) => drawDetection(detection, state.ghostOpacity));
   }
   state.detections.forEach((detection) => drawDetection(detection, 1));
 }
@@ -1184,6 +1293,20 @@ elements.spatialAudioToggle.addEventListener("change", (event) => {
   saveSettings();
 });
 
+elements.privacyBlurRange.addEventListener("input", (event) => {
+  state.privacyBlur = Number(event.target.value);
+  elements.privacyBlurValue.textContent = `${state.privacyBlur}px`;
+  saveSettings();
+});
+
+elements.ghostOpacityRange.addEventListener("input", (event) => {
+  state.ghostOpacity = Number(event.target.value);
+  elements.ghostOpacityValue.textContent = `${Math.round(state.ghostOpacity * 100)}%`;
+  saveSettings();
+});
+
+elements.exportFilmstrip.addEventListener("click", exportFilmstripGallery);
+
 elements.overlay.addEventListener("pointerdown", (event) => {
   if (!state.roiDrawing) return;
   const rect = elements.videoStage.getBoundingClientRect();
@@ -1236,6 +1359,7 @@ window.addEventListener("load", () => {
 function renderStage() {
   drawOverlay();
   drawHeatmap();
+  drawProximityRadar();
   requestAnimationFrame(renderStage);
 }
 

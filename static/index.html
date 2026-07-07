@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Real-Time Object Detection</title>
-    <link rel="stylesheet" href="/static/styles.css?v=1.5.0" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.6.0" />
     <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    <script defer src="/static/app.js?v=1.5.0"></script>
+    <script defer src="/static/app.js?v=1.6.0"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -169,6 +169,38 @@
             <canvas id="latencyChart" width="280" height="64"></canvas>
           </div>
 
+          <div class="latency-panel">
+            <div class="detections-head">
+              <h2>Detection density</h2>
+              <span id="densityAvg">--</span>
+            </div>
+            <canvas id="densityChart" width="280" height="64"></canvas>
+          </div>
+
+          <div class="radar-panel">
+            <div class="detections-head">
+              <h2>Proximity radar</h2>
+              <span id="radarCount">0 blips</span>
+            </div>
+            <canvas id="proximityRadar" width="160" height="160"></canvas>
+          </div>
+
+          <div class="control-group">
+            <label for="privacyBlurRange">Privacy blur strength</label>
+            <div class="range-row">
+              <input id="privacyBlurRange" type="range" min="6" max="28" value="14" />
+              <output id="privacyBlurValue">14px</output>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <label for="ghostOpacityRange">Ghost fade</label>
+            <div class="range-row">
+              <input id="ghostOpacityRange" type="range" min="0.08" max="0.55" step="0.01" value="0.28" />
+              <output id="ghostOpacityValue">28%</output>
+            </div>
+          </div>
+
           <div class="stats-grid session-grid">
             <div class="stat">
               <span>Frames</span>
@@ -220,6 +252,7 @@
               <h2>Alert filmstrip</h2>
               <span id="filmstripCount">0 clips</span>
             </div>
+            <button class="ghost-button" id="exportFilmstrip" type="button" disabled>Export gallery</button>
             <div id="alertFilmstrip" class="alert-filmstrip"></div>
           </div>
 
