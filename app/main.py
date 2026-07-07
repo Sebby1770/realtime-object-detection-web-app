@@ -28,7 +28,7 @@ ACTIVE_CONNECTIONS = 0
 app = FastAPI(
     title="Real-Time Object Detection",
     description="FastAPI, WebSockets, OpenCV, and YOLOv8 live object detection.",
-    version="1.3.0",
+    version="1.4.0",
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -43,7 +43,7 @@ async def index() -> FileResponse:
 async def health() -> dict[str, str | int]:
     return {
         "status": "ok",
-        "version": "1.3.0",
+        "version": "1.4.0",
         "active_connections": ACTIVE_CONNECTIONS,
         "max_connections": MAX_WS_CONNECTIONS,
     }
@@ -64,6 +64,22 @@ async def detect_upload(
         return {"type": "error", "message": "Empty image upload."}
     payload = await detect_objects(frame_bytes, confidence=confidence)
     return payload
+
+
+@app.post("/api/detect/batch")
+async def detect_batch(
+    images: list[UploadFile] = File(...),
+    confidence: float | None = None,
+) -> dict[str, object]:
+    results: list[dict[str, object]] = []
+    for upload in images[:12]:
+        frame_bytes = await upload.read()
+        if not frame_bytes:
+            continue
+        payload = await detect_objects(frame_bytes, confidence=confidence)
+        payload["filename"] = upload.filename
+        results.append(payload)
+    return {"count": len(results), "results": results}
 
 
 @app.get("/api/stats")

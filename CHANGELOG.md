@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.4.0 — 2026-07-07
+
+### Added
+- **Multi-ROI zones** (up to 3) with per-zone colors and labels
+- **Tracker motion trails** rendered on the overlay canvas
+- **Pause/resume** detection without stopping the camera
+- **ROI alert sound** via Web Audio tone
+- **Light/dark theme** toggle with localStorage persistence
+- **Batch image upload** detection via `POST /api/detect/batch`
+
+### Improved
+- Tracker now returns `trail` coordinates for each detection
+- Upload UI accepts multiple files in one batch
+
 ## 1.3.0 — 2026-07-07
 
 ### Added

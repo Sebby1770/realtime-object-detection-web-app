@@ -59,7 +59,7 @@ def test_health_reports_version() -> None:
     client = TestClient(main.app)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["version"] == "1.3.0"
+    assert response.json()["version"] == "1.4.0"
 
 
 def test_run_detection_filters_by_class(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,6 +114,55 @@ def test_tracker_assigns_stable_ids() -> None:
         ]
     )
     assert first[0]["track_id"] == second[0]["track_id"]
+
+
+def test_tracker_builds_motion_trails() -> None:
+    tracker = SimpleTracker(trail_length=4)
+    first = tracker.assign(
+        [
+            {
+                "label": "person",
+                "confidence": 0.9,
+                "box": {"x": 10, "y": 10, "width": 40, "height": 60},
+            }
+        ]
+    )
+    second = tracker.assign(
+        [
+            {
+                "label": "person",
+                "confidence": 0.88,
+                "box": {"x": 20, "y": 15, "width": 40, "height": 60},
+            }
+        ]
+    )
+    assert len(first[0]["trail"]) == 1
+    assert len(second[0]["trail"]) == 2
+    assert second[0]["trail"][-1]["x"] == 40.0
+
+
+def test_batch_detect_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_detect(frame_bytes, confidence=None, class_filter=None, tracker=None):
+        return {
+            "detections": [{"label": "person", "confidence": 0.9, "box": {"x": 1, "y": 2, "width": 3, "height": 4}}],
+            "frame_width": 32,
+            "frame_height": 48,
+            "class_counts": {"person": 1},
+        }
+
+    monkeypatch.setattr("app.main.detect_objects", fake_detect)
+    client = TestClient(main.app)
+    response = client.post(
+        "/api/detect/batch",
+        files=[
+            ("images", ("a.jpg", b"fake-a", "image/jpeg")),
+            ("images", ("b.jpg", b"fake-b", "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 2
+    assert len(payload["results"]) == 2
 
 
 def test_session_stats_endpoint() -> None:

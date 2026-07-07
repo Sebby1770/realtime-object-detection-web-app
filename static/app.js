@@ -38,6 +38,10 @@ const elements = {
   roiDrawButton: document.querySelector("#roiDrawButton"),
   roiClearButton: document.querySelector("#roiClearButton"),
   roiStatus: document.querySelector("#roiStatus"),
+  pauseButton: document.querySelector("#pauseButton"),
+  trailToggle: document.querySelector("#trailToggle"),
+  alertSoundToggle: document.querySelector("#alertSoundToggle"),
+  themeToggle: document.querySelector("#themeToggle"),
   sessionFrames: document.querySelector("#sessionFrames"),
   sessionDetections: document.querySelector("#sessionDetections"),
   sessionClasses: document.querySelector("#sessionClasses"),
@@ -68,9 +72,13 @@ const state = {
   showHeatmap: true,
   heatmapCells: [],
   cornerBoxes: false,
-  roi: null,
+  showTrails: true,
+  alertSound: true,
+  paused: false,
+  rois: [],
   roiDrawing: false,
   roiStart: null,
+  maxRois: 3,
   session: {
     frames_processed: 0,
     detections_total: 0,
@@ -89,6 +97,14 @@ const palette = [
   "#f472b6",
   "#fb923c",
 ];
+
+function alphaColor(hex, opacity) {
+  const value = hex.replace("#", "");
+  const r = parseInt(value.slice(0, 2), 16);
+  const g = parseInt(value.slice(2, 4), 16);
+  const b = parseInt(value.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+}
 
 function colorForLabel(label) {
   let hash = 0;
@@ -317,6 +333,7 @@ async function startCamera() {
   elements.exportHistoryButton.disabled = false;
   elements.roiDrawButton.disabled = false;
   elements.roiClearButton.disabled = false;
+  elements.pauseButton.disabled = false;
   if (!state.demoMode) {
     elements.lastUpdated.textContent = "Camera connected";
   }
@@ -355,6 +372,9 @@ function stopCamera() {
   elements.exportHistoryButton.disabled = true;
   elements.roiDrawButton.disabled = true;
   elements.roiClearButton.disabled = true;
+  elements.pauseButton.disabled = true;
+  state.paused = false;
+  elements.pauseButton.textContent = "Pause";
   setConnectionStatus("Offline");
 }
 
@@ -375,19 +395,59 @@ function pointInRoi(x, y, roi, frameWidth, frameHeight) {
   return x >= left && x <= right && y >= top && y <= bottom;
 }
 
+const ROI_COLORS = ["rgba(245, 200, 75, 0.9)", "rgba(56, 214, 198, 0.9)", "rgba(255, 111, 89, 0.9)"];
+
+function playAlertTone() {
+  if (!state.alertSound) return;
+  const AudioContext = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContext) return;
+  const context = new AudioContext();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = "square";
+  oscillator.frequency.value = 880;
+  gain.gain.value = 0.04;
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start();
+  oscillator.stop(context.currentTime + 0.12);
+  oscillator.onended = () => context.close();
+}
+
 function checkRoiAlerts(detections) {
-  if (!state.roi) return;
+  if (!state.rois.length) return;
   for (const detection of detections) {
     const box = detection.box;
     const centerX = box.x + box.width / 2;
     const centerY = box.y + box.height / 2;
-    if (pointInRoi(centerX, centerY, state.roi, state.frameSize.width, state.frameSize.height)) {
-      state.session.roi_alerts += 1;
-      elements.roiAlerts.textContent = String(state.session.roi_alerts);
-      elements.roiStatus.textContent = `Alert: ${detection.label} entered ROI`;
-      return;
+    for (let index = 0; index < state.rois.length; index += 1) {
+      const roi = state.rois[index];
+      if (pointInRoi(centerX, centerY, roi, state.frameSize.width, state.frameSize.height)) {
+        state.session.roi_alerts += 1;
+        elements.roiAlerts.textContent = String(state.session.roi_alerts);
+        elements.roiStatus.textContent = `Alert: ${detection.label} entered zone ${index + 1}`;
+        playAlertTone();
+        return;
+      }
     }
   }
+}
+
+function togglePause() {
+  state.paused = !state.paused;
+  elements.pauseButton.textContent = state.paused ? "Resume" : "Pause";
+  elements.lastUpdated.textContent = state.paused ? "Detection paused" : "Running";
+}
+
+function applyTheme(light) {
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  elements.themeToggle.checked = light;
+  localStorage.setItem("object-detection-theme", light ? "light" : "dark");
+}
+
+function loadTheme() {
+  const saved = localStorage.getItem("object-detection-theme");
+  applyTheme(saved === "light");
 }
 
 function drawCornerBox(context, x, y, width, height, color) {
@@ -409,30 +469,58 @@ function drawCornerBox(context, x, y, width, height, color) {
   context.stroke();
 }
 
-async function detectUploadedImage(file) {
-  if (!file) return;
+async function detectUploadedImages(fileList) {
+  const files = Array.from(fileList || []).filter(Boolean);
+  if (!files.length) return;
+
+  if (files.length === 1) {
+    const form = new FormData();
+    form.append("image", files[0]);
+    elements.uploadDetectStatus.textContent = "Detecting...";
+    try {
+      const response = await fetch(`/api/detect?confidence=${state.confidence}`, {
+        method: "POST",
+        body: form,
+      });
+      const payload = await response.json();
+      applyDetectionPayload(payload);
+      elements.uploadDetectStatus.textContent = `Detected ${state.detections.length} object(s) in ${files[0].name}.`;
+    } catch {
+      elements.uploadDetectStatus.textContent = "Upload detection failed.";
+    }
+    return;
+  }
+
   const form = new FormData();
-  form.append("image", file);
-  elements.uploadDetectStatus.textContent = "Detecting...";
+  files.forEach((file) => form.append("images", file));
+  elements.uploadDetectStatus.textContent = `Detecting ${files.length} images...`;
   try {
-    const response = await fetch(`/api/detect?confidence=${state.confidence}`, {
+    const response = await fetch(`/api/detect/batch?confidence=${state.confidence}`, {
       method: "POST",
       body: form,
     });
     const payload = await response.json();
-    state.detections = payload.detections ?? [];
-    state.frameSize = {
-      width: payload.frame_width || 1,
-      height: payload.frame_height || 1,
-    };
-    state.classCounts = payload.class_counts ?? {};
-    renderClassChips();
-    renderDetectionList();
-    elements.objectCount.textContent = String(state.detections.length);
-    elements.uploadDetectStatus.textContent = `Detected ${state.detections.length} object(s) in upload.`;
+    const results = payload.results ?? [];
+    const total = results.reduce((sum, item) => sum + (item.detections?.length ?? 0), 0);
+    if (results[0]) {
+      applyDetectionPayload(results[0]);
+    }
+    elements.uploadDetectStatus.textContent = `Batch complete: ${total} detections across ${results.length} image(s).`;
   } catch {
-    elements.uploadDetectStatus.textContent = "Upload detection failed.";
+    elements.uploadDetectStatus.textContent = "Batch upload detection failed.";
   }
+}
+
+function applyDetectionPayload(payload) {
+  state.detections = payload.detections ?? [];
+  state.frameSize = {
+    width: payload.frame_width || 1,
+    height: payload.frame_height || 1,
+  };
+  state.classCounts = payload.class_counts ?? {};
+  renderClassChips();
+  renderDetectionList();
+  elements.objectCount.textContent = String(state.detections.length);
 }
 
 function recordLatency(value) {
@@ -536,6 +624,8 @@ function saveSettings() {
       showLabels: state.showLabels,
       showHeatmap: state.showHeatmap,
       selectedClasses: state.selectedClasses,
+      showTrails: state.showTrails,
+      alertSound: state.alertSound,
     }),
   );
 }
@@ -568,6 +658,14 @@ function loadSettings() {
     }
     if (saved.selectedClasses?.length) {
       state.selectedClasses = saved.selectedClasses;
+    }
+    if (saved.showTrails != null) {
+      state.showTrails = saved.showTrails;
+      elements.trailToggle.checked = saved.showTrails;
+    }
+    if (saved.alertSound != null) {
+      state.alertSound = saved.alertSound;
+      elements.alertSoundToggle.checked = saved.alertSound;
     }
   } catch {
     // ignore invalid saved settings
@@ -669,6 +767,7 @@ function captureLoop() {
   window.setTimeout(captureLoop, delay);
 
   if (
+    state.paused ||
     state.inFlight ||
     state.socket?.readyState !== WebSocket.OPEN
   ) {
@@ -740,16 +839,19 @@ function drawOverlay() {
   const xScale = width / state.frameSize.width;
   const yScale = height / state.frameSize.height;
 
-  if (state.roi) {
-    const roiX = state.roi.x * width;
-    const roiY = state.roi.y * height;
-    const roiW = state.roi.width * width;
-    const roiH = state.roi.height * height;
-    context.strokeStyle = "rgba(245, 200, 75, 0.9)";
+  state.rois.forEach((roi, index) => {
+    const roiX = roi.x * width;
+    const roiY = roi.y * height;
+    const roiW = roi.width * width;
+    const roiH = roi.height * height;
+    context.strokeStyle = ROI_COLORS[index % ROI_COLORS.length];
     context.setLineDash([8, 6]);
     context.strokeRect(roiX, roiY, roiW, roiH);
     context.setLineDash([]);
-  }
+    context.fillStyle = ROI_COLORS[index % ROI_COLORS.length];
+    context.font = "700 12px system-ui, sans-serif";
+    context.fillText(`Z${index + 1}`, roiX + 6, roiY + 16);
+  });
 
   for (const detection of state.detections) {
     const box = detection.box;
@@ -758,6 +860,19 @@ function drawOverlay() {
     const boxWidth = box.width * xScale;
     const boxHeight = box.height * yScale;
     const color = colorForLabel(detection.label);
+
+    if (state.showTrails && detection.trail?.length > 1) {
+      context.strokeStyle = alphaColor(color, 0.55);
+      context.lineWidth = 2;
+      context.beginPath();
+      detection.trail.forEach((point, index) => {
+        const px = point.x * xScale;
+        const py = point.y * yScale;
+        if (index === 0) context.moveTo(px, py);
+        else context.lineTo(px, py);
+      });
+      context.stroke();
+    }
 
     context.lineWidth = Math.max(2, Math.min(width, height) * 0.004);
     context.strokeStyle = color;
@@ -859,19 +974,38 @@ elements.cornerBoxToggle.addEventListener("change", (event) => {
 });
 
 elements.uploadDetect.addEventListener("change", (event) => {
-  const file = event.target.files?.[0];
-  detectUploadedImage(file);
+  detectUploadedImages(event.target.files);
 });
 
 elements.roiDrawButton.addEventListener("click", () => {
+  if (state.rois.length >= state.maxRois) {
+    elements.roiStatus.textContent = `Maximum ${state.maxRois} zones reached.`;
+    return;
+  }
   state.roiDrawing = true;
-  elements.roiStatus.textContent = "Click and drag on the video to set ROI.";
+  elements.roiStatus.textContent = "Click and drag on the video to add a zone.";
 });
 
 elements.roiClearButton.addEventListener("click", () => {
-  state.roi = null;
+  state.rois = [];
   state.roiDrawing = false;
-  elements.roiStatus.textContent = "No ROI set.";
+  elements.roiStatus.textContent = "No ROI zones set (max 3).";
+});
+
+elements.pauseButton.addEventListener("click", togglePause);
+
+elements.trailToggle.addEventListener("change", (event) => {
+  state.showTrails = event.target.checked;
+  saveSettings();
+});
+
+elements.alertSoundToggle.addEventListener("change", (event) => {
+  state.alertSound = event.target.checked;
+  saveSettings();
+});
+
+elements.themeToggle.addEventListener("change", (event) => {
+  applyTheme(event.target.checked);
 });
 
 elements.overlay.addEventListener("pointerdown", (event) => {
@@ -888,15 +1022,17 @@ elements.overlay.addEventListener("pointerup", (event) => {
   const rect = elements.videoStage.getBoundingClientRect();
   const endX = (event.clientX - rect.left) / rect.width;
   const endY = (event.clientY - rect.top) / rect.height;
-  state.roi = {
-    x: Math.min(state.roiStart.x, endX),
-    y: Math.min(state.roiStart.y, endY),
-    width: Math.abs(endX - state.roiStart.x),
-    height: Math.abs(endY - state.roiStart.y),
-  };
+  if (state.rois.length < state.maxRois) {
+    state.rois.push({
+      x: Math.min(state.roiStart.x, endX),
+      y: Math.min(state.roiStart.y, endY),
+      width: Math.abs(endX - state.roiStart.x),
+      height: Math.abs(endY - state.roiStart.y),
+    });
+  }
   state.roiDrawing = false;
   state.roiStart = null;
-  elements.roiStatus.textContent = "ROI armed.";
+  elements.roiStatus.textContent = `${state.rois.length} zone(s) armed.`;
 });
 
 elements.fpsRange.addEventListener("change", saveSettings);
@@ -913,6 +1049,7 @@ elements.clearHistoryButton.addEventListener("click", () => {
 window.addEventListener("beforeunload", stopCamera);
 window.addEventListener("load", () => {
   state.heatmapCells = Array.from({ length: 16 * 9 }, () => 0);
+  loadTheme();
   loadSettings();
   loadModelMetadata();
   if (window.lucide) {
