@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.detector import detect_objects, model_info
+from app.stats import SessionStats
 from app.tracker import SimpleTracker
 
 
@@ -27,7 +28,7 @@ ACTIVE_CONNECTIONS = 0
 app = FastAPI(
     title="Real-Time Object Detection",
     description="FastAPI, WebSockets, OpenCV, and YOLOv8 live object detection.",
-    version="1.2.0",
+    version="1.3.0",
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -42,7 +43,7 @@ async def index() -> FileResponse:
 async def health() -> dict[str, str | int]:
     return {
         "status": "ok",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "active_connections": ACTIVE_CONNECTIONS,
         "max_connections": MAX_WS_CONNECTIONS,
     }
@@ -63,6 +64,14 @@ async def detect_upload(
         return {"type": "error", "message": "Empty image upload."}
     payload = await detect_objects(frame_bytes, confidence=confidence)
     return payload
+
+
+@app.get("/api/stats")
+async def session_stats() -> dict[str, str | int | float | list[str]]:
+    return _SESSION_STATS.as_dict()
+
+
+_SESSION_STATS = SessionStats()
 
 
 def allowed_origins() -> set[str]:
@@ -98,6 +107,7 @@ async def detect_socket(websocket: WebSocket) -> None:
     class_filter: list[str] | None = None
     processing = False
     tracker = SimpleTracker()
+    session_stats = SessionStats()
 
     try:
         while True:
@@ -163,6 +173,15 @@ async def detect_socket(websocket: WebSocket) -> None:
                     (time.perf_counter() - started) * 1000,
                     1,
                 )
+                session_stats.record_frame(
+                    payload.get("detections", []),
+                    payload["latency_ms"],
+                )
+                _SESSION_STATS.frames_processed = session_stats.frames_processed
+                _SESSION_STATS.detections_total = session_stats.detections_total
+                _SESSION_STATS.classes_seen = set(session_stats.classes_seen)
+                _SESSION_STATS.latency_samples = list(session_stats.latency_samples)
+                payload["session"] = session_stats.as_dict()
                 await websocket.send_json(payload)
                 processing = False
             except WebSocketDisconnect:

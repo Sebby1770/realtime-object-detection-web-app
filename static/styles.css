@@ -399,6 +399,14 @@ output {
   width: 100%;
 }
 
+.session-grid {
+  margin-top: 0.75rem;
+}
+
+#uploadDetect {
+  width: 100%;
+}
+
 #classFilter {
   width: 100%;
   min-height: 7rem;

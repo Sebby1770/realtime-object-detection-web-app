@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.detector import _class_name, decode_jpeg, model_info, run_detection
+from app.stats import SessionStats
 from app.tracker import SimpleTracker
 
 
@@ -58,7 +59,7 @@ def test_health_reports_version() -> None:
     client = TestClient(main.app)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["version"] == "1.2.0"
+    assert response.json()["version"] == "1.3.0"
 
 
 def test_run_detection_filters_by_class(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -113,6 +114,25 @@ def test_tracker_assigns_stable_ids() -> None:
         ]
     )
     assert first[0]["track_id"] == second[0]["track_id"]
+
+
+def test_session_stats_endpoint() -> None:
+    client = TestClient(main.app)
+    response = client.get("/api/stats")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "frames_processed" in payload
+    assert "detections_total" in payload
+
+
+def test_session_stats_accumulates() -> None:
+    stats = SessionStats()
+    stats.record_frame([{"label": "person"}], latency_ms=12.5)
+    stats.record_frame([{"label": "bicycle"}], latency_ms=8.0)
+    payload = stats.as_dict()
+    assert payload["frames_processed"] == 2
+    assert payload["detections_total"] == 2
+    assert payload["classes_seen"] == ["bicycle", "person"]
 
 
 def test_websocket_rejects_large_frame(monkeypatch: pytest.MonkeyPatch) -> None:

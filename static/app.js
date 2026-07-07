@@ -32,6 +32,16 @@ const elements = {
   latencyChart: document.querySelector("#latencyChart"),
   latencyAvg: document.querySelector("#latencyAvg"),
   exportHistoryButton: document.querySelector("#exportHistoryButton"),
+  cornerBoxToggle: document.querySelector("#cornerBoxToggle"),
+  uploadDetect: document.querySelector("#uploadDetect"),
+  uploadDetectStatus: document.querySelector("#uploadDetectStatus"),
+  roiDrawButton: document.querySelector("#roiDrawButton"),
+  roiClearButton: document.querySelector("#roiClearButton"),
+  roiStatus: document.querySelector("#roiStatus"),
+  sessionFrames: document.querySelector("#sessionFrames"),
+  sessionDetections: document.querySelector("#sessionDetections"),
+  sessionClasses: document.querySelector("#sessionClasses"),
+  roiAlerts: document.querySelector("#roiAlerts"),
 };
 
 const state = {
@@ -57,6 +67,16 @@ const state = {
   latencySamples: [],
   showHeatmap: true,
   heatmapCells: [],
+  cornerBoxes: false,
+  roi: null,
+  roiDrawing: false,
+  roiStart: null,
+  session: {
+    frames_processed: 0,
+    detections_total: 0,
+    classes_seen: [],
+    roi_alerts: 0,
+  },
 };
 
 const palette = [
@@ -247,6 +267,8 @@ function connectSocket() {
     updateHeatmap(payload.detections ?? []);
     recordLatency(payload.latency_ms);
     renderClassChips();
+    updateSessionStats(payload.session);
+    checkRoiAlerts(state.detections);
     state.frameSize = {
       width: payload.frame_width || 1,
       height: payload.frame_height || 1,
@@ -293,6 +315,8 @@ async function startCamera() {
   elements.snapshotButton.disabled = false;
   elements.clearHistoryButton.disabled = false;
   elements.exportHistoryButton.disabled = false;
+  elements.roiDrawButton.disabled = false;
+  elements.roiClearButton.disabled = false;
   if (!state.demoMode) {
     elements.lastUpdated.textContent = "Camera connected";
   }
@@ -329,7 +353,86 @@ function stopCamera() {
   elements.snapshotButton.disabled = true;
   elements.clearHistoryButton.disabled = true;
   elements.exportHistoryButton.disabled = true;
+  elements.roiDrawButton.disabled = true;
+  elements.roiClearButton.disabled = true;
   setConnectionStatus("Offline");
+}
+
+function updateSessionStats(session) {
+  if (!session) return;
+  state.session = session;
+  elements.sessionFrames.textContent = String(session.frames_processed ?? 0);
+  elements.sessionDetections.textContent = String(session.detections_total ?? 0);
+  elements.sessionClasses.textContent = String(session.classes_seen?.length ?? 0);
+  elements.roiAlerts.textContent = String(state.session.roi_alerts ?? 0);
+}
+
+function pointInRoi(x, y, roi, frameWidth, frameHeight) {
+  const left = roi.x * frameWidth;
+  const top = roi.y * frameHeight;
+  const right = left + roi.width * frameWidth;
+  const bottom = top + roi.height * frameHeight;
+  return x >= left && x <= right && y >= top && y <= bottom;
+}
+
+function checkRoiAlerts(detections) {
+  if (!state.roi) return;
+  for (const detection of detections) {
+    const box = detection.box;
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+    if (pointInRoi(centerX, centerY, state.roi, state.frameSize.width, state.frameSize.height)) {
+      state.session.roi_alerts += 1;
+      elements.roiAlerts.textContent = String(state.session.roi_alerts);
+      elements.roiStatus.textContent = `Alert: ${detection.label} entered ROI`;
+      return;
+    }
+  }
+}
+
+function drawCornerBox(context, x, y, width, height, color) {
+  const arm = Math.min(width, height) * 0.22;
+  context.strokeStyle = color;
+  context.beginPath();
+  context.moveTo(x, y + arm);
+  context.lineTo(x, y);
+  context.lineTo(x + arm, y);
+  context.moveTo(x + width - arm, y);
+  context.lineTo(x + width, y);
+  context.lineTo(x + width, y + arm);
+  context.moveTo(x + width, y + height - arm);
+  context.lineTo(x + width, y + height);
+  context.lineTo(x + width - arm, y + height);
+  context.moveTo(x + arm, y + height);
+  context.lineTo(x, y + height);
+  context.lineTo(x, y + height - arm);
+  context.stroke();
+}
+
+async function detectUploadedImage(file) {
+  if (!file) return;
+  const form = new FormData();
+  form.append("image", file);
+  elements.uploadDetectStatus.textContent = "Detecting...";
+  try {
+    const response = await fetch(`/api/detect?confidence=${state.confidence}`, {
+      method: "POST",
+      body: form,
+    });
+    const payload = await response.json();
+    state.detections = payload.detections ?? [];
+    state.frameSize = {
+      width: payload.frame_width || 1,
+      height: payload.frame_height || 1,
+    };
+    state.classCounts = payload.class_counts ?? {};
+    renderClassChips();
+    renderDetectionList();
+    elements.objectCount.textContent = String(state.detections.length);
+    elements.uploadDetectStatus.textContent = `Detected ${state.detections.length} object(s) in upload.`;
+  } catch {
+    elements.uploadDetectStatus.textContent = "Upload detection failed.";
+  }
 }
 
 function recordLatency(value) {
@@ -637,6 +740,17 @@ function drawOverlay() {
   const xScale = width / state.frameSize.width;
   const yScale = height / state.frameSize.height;
 
+  if (state.roi) {
+    const roiX = state.roi.x * width;
+    const roiY = state.roi.y * height;
+    const roiW = state.roi.width * width;
+    const roiH = state.roi.height * height;
+    context.strokeStyle = "rgba(245, 200, 75, 0.9)";
+    context.setLineDash([8, 6]);
+    context.strokeRect(roiX, roiY, roiW, roiH);
+    context.setLineDash([]);
+  }
+
   for (const detection of state.detections) {
     const box = detection.box;
     const x = box.x * xScale;
@@ -648,7 +762,11 @@ function drawOverlay() {
     context.lineWidth = Math.max(2, Math.min(width, height) * 0.004);
     context.strokeStyle = color;
     context.fillStyle = color;
-    context.strokeRect(x, y, boxWidth, boxHeight);
+    if (state.cornerBoxes) {
+      drawCornerBox(context, x, y, boxWidth, boxHeight, color);
+    } else {
+      context.strokeRect(x, y, boxWidth, boxHeight);
+    }
 
     if (state.showLabels) {
       const track = detection.track_id ? `#${detection.track_id} ` : "";
@@ -733,6 +851,52 @@ elements.classFilter.addEventListener("change", () => {
 elements.heatmapToggle.addEventListener("change", (event) => {
   state.showHeatmap = event.target.checked;
   saveSettings();
+});
+
+elements.cornerBoxToggle.addEventListener("change", (event) => {
+  state.cornerBoxes = event.target.checked;
+  saveSettings();
+});
+
+elements.uploadDetect.addEventListener("change", (event) => {
+  const file = event.target.files?.[0];
+  detectUploadedImage(file);
+});
+
+elements.roiDrawButton.addEventListener("click", () => {
+  state.roiDrawing = true;
+  elements.roiStatus.textContent = "Click and drag on the video to set ROI.";
+});
+
+elements.roiClearButton.addEventListener("click", () => {
+  state.roi = null;
+  state.roiDrawing = false;
+  elements.roiStatus.textContent = "No ROI set.";
+});
+
+elements.overlay.addEventListener("pointerdown", (event) => {
+  if (!state.roiDrawing) return;
+  const rect = elements.videoStage.getBoundingClientRect();
+  state.roiStart = {
+    x: (event.clientX - rect.left) / rect.width,
+    y: (event.clientY - rect.top) / rect.height,
+  };
+});
+
+elements.overlay.addEventListener("pointerup", (event) => {
+  if (!state.roiDrawing || !state.roiStart) return;
+  const rect = elements.videoStage.getBoundingClientRect();
+  const endX = (event.clientX - rect.left) / rect.width;
+  const endY = (event.clientY - rect.top) / rect.height;
+  state.roi = {
+    x: Math.min(state.roiStart.x, endX),
+    y: Math.min(state.roiStart.y, endY),
+    width: Math.abs(endX - state.roiStart.x),
+    height: Math.abs(endY - state.roiStart.y),
+  };
+  state.roiDrawing = false;
+  state.roiStart = null;
+  elements.roiStatus.textContent = "ROI armed.";
 });
 
 elements.fpsRange.addEventListener("change", saveSettings);

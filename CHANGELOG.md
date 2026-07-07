@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0 — 2026-07-07
+
+### Added
+- **Region of interest (ROI)** drawing with entry alerts
+- **Image upload detection** UI using `POST /api/detect`
+- **Corner bracket box** rendering style toggle
+- **Session stats** panel (frames, total detections, classes, ROI alerts)
+- **`GET /api/stats`** global session metrics endpoint
+- WebSocket payloads now include per-connection `session` stats
+
 ## 1.2.0 — 2026-07-07
 
 ### Added
