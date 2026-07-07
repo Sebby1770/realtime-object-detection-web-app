@@ -86,7 +86,7 @@ def test_run_detection_filters_by_class(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr("app.detector.load_model", lambda: FakeModel())
     frame = np.zeros((32, 48, 3), dtype=np.uint8)
-    all_detections = run_detection(frame, classes=None)
+    all_detections = run_detection(frame, class_filter=None)
     filtered = run_detection(frame, class_filter=["bicycle"])
     assert len(all_detections["detections"]) == 1
     assert filtered["detections"] == []
