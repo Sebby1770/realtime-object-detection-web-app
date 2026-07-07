@@ -5,11 +5,12 @@ import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.detector import detect_objects, model_info
+from app.tracker import SimpleTracker
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,7 +27,7 @@ ACTIVE_CONNECTIONS = 0
 app = FastAPI(
     title="Real-Time Object Detection",
     description="FastAPI, WebSockets, OpenCV, and YOLOv8 live object detection.",
-    version="1.1.0",
+    version="1.2.0",
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -41,7 +42,7 @@ async def index() -> FileResponse:
 async def health() -> dict[str, str | int]:
     return {
         "status": "ok",
-        "version": "1.1.0",
+        "version": "1.2.0",
         "active_connections": ACTIVE_CONNECTIONS,
         "max_connections": MAX_WS_CONNECTIONS,
     }
@@ -50,6 +51,18 @@ async def health() -> dict[str, str | int]:
 @app.get("/api/model")
 async def model_metadata() -> dict[str, object]:
     return model_info()
+
+
+@app.post("/api/detect")
+async def detect_upload(
+    image: UploadFile = File(...),
+    confidence: float | None = None,
+) -> dict[str, object]:
+    frame_bytes = await image.read()
+    if not frame_bytes:
+        return {"type": "error", "message": "Empty image upload."}
+    payload = await detect_objects(frame_bytes, confidence=confidence)
+    return payload
 
 
 def allowed_origins() -> set[str]:
@@ -84,6 +97,7 @@ async def detect_socket(websocket: WebSocket) -> None:
     confidence_threshold: float | None = None
     class_filter: list[str] | None = None
     processing = False
+    tracker = SimpleTracker()
 
     try:
         while True:
@@ -142,7 +156,8 @@ async def detect_socket(websocket: WebSocket) -> None:
                 payload = await detect_objects(
                     frame,
                     confidence=confidence_threshold,
-                    classes=class_filter,
+                    class_filter=class_filter,
+                    tracker=tracker,
                 )
                 payload["latency_ms"] = round(
                     (time.perf_counter() - started) * 1000,

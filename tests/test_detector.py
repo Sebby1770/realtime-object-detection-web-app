@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.detector import _class_name, decode_jpeg, model_info, run_detection
+from app.tracker import SimpleTracker
 
 
 def test_decode_jpeg_round_trip() -> None:
@@ -57,7 +58,7 @@ def test_health_reports_version() -> None:
     client = TestClient(main.app)
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["version"] == "1.1.0"
+    assert response.json()["version"] == "1.2.0"
 
 
 def test_run_detection_filters_by_class(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -86,9 +87,32 @@ def test_run_detection_filters_by_class(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr("app.detector.load_model", lambda: FakeModel())
     frame = np.zeros((32, 48, 3), dtype=np.uint8)
     all_detections = run_detection(frame, classes=None)
-    filtered = run_detection(frame, classes=["bicycle"])
+    filtered = run_detection(frame, class_filter=["bicycle"])
     assert len(all_detections["detections"]) == 1
     assert filtered["detections"] == []
+
+
+def test_tracker_assigns_stable_ids() -> None:
+    tracker = SimpleTracker()
+    first = tracker.assign(
+        [
+            {
+                "label": "person",
+                "confidence": 0.9,
+                "box": {"x": 10, "y": 10, "width": 40, "height": 60},
+            }
+        ]
+    )
+    second = tracker.assign(
+        [
+            {
+                "label": "person",
+                "confidence": 0.88,
+                "box": {"x": 12, "y": 11, "width": 40, "height": 60},
+            }
+        ]
+    )
+    assert first[0]["track_id"] == second[0]["track_id"]
 
 
 def test_websocket_rejects_large_frame(monkeypatch: pytest.MonkeyPatch) -> None:

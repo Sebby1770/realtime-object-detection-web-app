@@ -26,6 +26,12 @@ const elements = {
   historyList: document.querySelector("#historyList"),
   historyCount: document.querySelector("#historyCount"),
   modelName: document.querySelector("#modelName"),
+  heatmap: document.querySelector("#heatmap"),
+  heatmapToggle: document.querySelector("#heatmapToggle"),
+  classChips: document.querySelector("#classChips"),
+  latencyChart: document.querySelector("#latencyChart"),
+  latencyAvg: document.querySelector("#latencyAvg"),
+  exportHistoryButton: document.querySelector("#exportHistoryButton"),
 };
 
 const state = {
@@ -47,6 +53,10 @@ const state = {
   selectedClasses: [],
   history: [],
   modelClasses: [],
+  classCounts: {},
+  latencySamples: [],
+  showHeatmap: true,
+  heatmapCells: [],
 };
 
 const palette = [
@@ -232,7 +242,11 @@ function connectSocket() {
     }
 
     state.detections = payload.detections ?? [];
+    state.classCounts = payload.class_counts ?? {};
     recordHistory(payload);
+    updateHeatmap(payload.detections ?? []);
+    recordLatency(payload.latency_ms);
+    renderClassChips();
     state.frameSize = {
       width: payload.frame_width || 1,
       height: payload.frame_height || 1,
@@ -278,6 +292,7 @@ async function startCamera() {
   elements.stopCamera.disabled = false;
   elements.snapshotButton.disabled = false;
   elements.clearHistoryButton.disabled = false;
+  elements.exportHistoryButton.disabled = false;
   if (!state.demoMode) {
     elements.lastUpdated.textContent = "Camera connected";
   }
@@ -313,7 +328,147 @@ function stopCamera() {
   elements.stopCamera.disabled = true;
   elements.snapshotButton.disabled = true;
   elements.clearHistoryButton.disabled = true;
+  elements.exportHistoryButton.disabled = true;
   setConnectionStatus("Offline");
+}
+
+function recordLatency(value) {
+  if (typeof value !== "number") return;
+  state.latencySamples = [...state.latencySamples, value].slice(-24);
+  const average = state.latencySamples.reduce((sum, item) => sum + item, 0) / state.latencySamples.length;
+  elements.latencyAvg.textContent = `${Math.round(average)} ms avg`;
+  drawLatencyChart();
+}
+
+function drawLatencyChart() {
+  const canvas = elements.latencyChart;
+  const context = canvas.getContext("2d");
+  const width = canvas.width;
+  const height = canvas.height;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#101012";
+  context.fillRect(0, 0, width, height);
+  if (!state.latencySamples.length) return;
+  const max = Math.max(...state.latencySamples, 1);
+  context.strokeStyle = "#38d6c6";
+  context.lineWidth = 2;
+  context.beginPath();
+  state.latencySamples.forEach((sample, index) => {
+    const x = (index / Math.max(1, state.latencySamples.length - 1)) * (width - 8) + 4;
+    const y = height - 6 - (sample / max) * (height - 12);
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  context.stroke();
+}
+
+function renderClassChips() {
+  const entries = Object.entries(state.classCounts).sort((a, b) => b[1] - a[1]);
+  elements.classChips.replaceChildren(
+    ...entries.map(([label, count]) => {
+      const chip = document.createElement("span");
+      chip.className = "class-chip";
+      chip.style.borderColor = colorForLabel(label);
+      chip.textContent = `${label} ${count}`;
+      return chip;
+    }),
+  );
+}
+
+function updateHeatmap(detections) {
+  if (!state.showHeatmap) return;
+  const grid = state.heatmapCells;
+  for (const detection of detections) {
+    const box = detection.box;
+    const centerX = Math.min(15, Math.max(0, Math.floor(((box.x + box.width / 2) / state.frameSize.width) * 16)));
+    const centerY = Math.min(8, Math.max(0, Math.floor(((box.y + box.height / 2) / state.frameSize.height) * 9)));
+    const index = centerY * 16 + centerX;
+    grid[index] = Math.min(1, (grid[index] || 0) + 0.22);
+  }
+  for (let index = 0; index < grid.length; index += 1) {
+    grid[index] = (grid[index] || 0) * 0.96;
+  }
+}
+
+function drawHeatmap() {
+  const rect = elements.videoStage.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.round(rect.width * dpr);
+  const height = Math.round(rect.height * dpr);
+  if (elements.heatmap.width !== width || elements.heatmap.height !== height) {
+    elements.heatmap.width = width;
+    elements.heatmap.height = height;
+  }
+  const context = elements.heatmap.getContext("2d");
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.clearRect(0, 0, rect.width, rect.height);
+  if (!state.showHeatmap) return;
+  const cellWidth = rect.width / 16;
+  const cellHeight = rect.height / 9;
+  state.heatmapCells.forEach((value, index) => {
+    if (!value || value < 0.03) return;
+    const x = (index % 16) * cellWidth;
+    const y = Math.floor(index / 16) * cellHeight;
+    context.fillStyle = `rgba(56, 214, 198, ${value * 0.55})`;
+    context.fillRect(x, y, cellWidth, cellHeight);
+  });
+}
+
+function exportHistory() {
+  const blob = new Blob([JSON.stringify(state.history, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.download = `detection-history-${Date.now()}.json`;
+  link.href = URL.createObjectURL(blob);
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function saveSettings() {
+  localStorage.setItem(
+    "object-detection-settings",
+    JSON.stringify({
+      confidence: state.confidence,
+      targetFps: state.targetFps,
+      processingWidth: state.processingWidth,
+      showLabels: state.showLabels,
+      showHeatmap: state.showHeatmap,
+      selectedClasses: state.selectedClasses,
+    }),
+  );
+}
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem("object-detection-settings") || "{}");
+    if (saved.confidence != null) {
+      state.confidence = saved.confidence;
+      elements.confidenceRange.value = String(saved.confidence);
+      elements.confidenceValue.textContent = `${Math.round(saved.confidence * 100)}%`;
+    }
+    if (saved.targetFps != null) {
+      state.targetFps = saved.targetFps;
+      elements.fpsRange.value = String(saved.targetFps);
+      elements.fpsValue.textContent = `${saved.targetFps} fps`;
+    }
+    if (saved.processingWidth != null) {
+      state.processingWidth = saved.processingWidth;
+      elements.widthRange.value = String(saved.processingWidth);
+      elements.widthValue.textContent = `${saved.processingWidth} px`;
+    }
+    if (saved.showLabels != null) {
+      state.showLabels = saved.showLabels;
+      elements.labelToggle.checked = saved.showLabels;
+    }
+    if (saved.showHeatmap != null) {
+      state.showHeatmap = saved.showHeatmap;
+      elements.heatmapToggle.checked = saved.showHeatmap;
+    }
+    if (saved.selectedClasses?.length) {
+      state.selectedClasses = saved.selectedClasses;
+    }
+  } catch {
+    // ignore invalid saved settings
+  }
 }
 
 function sendDetectionConfig() {
@@ -338,6 +493,7 @@ function populateClassFilter(classes) {
       const option = document.createElement("option");
       option.value = label;
       option.textContent = label;
+      option.selected = state.selectedClasses.includes(label);
       return option;
     }),
   );
@@ -495,7 +651,8 @@ function drawOverlay() {
     context.strokeRect(x, y, boxWidth, boxHeight);
 
     if (state.showLabels) {
-      const label = `${detection.label} ${Math.round(detection.confidence * 100)}%`;
+      const track = detection.track_id ? `#${detection.track_id} ` : "";
+      const label = `${track}${detection.label} ${Math.round(detection.confidence * 100)}%`;
       context.font = "700 14px system-ui, sans-serif";
       const metrics = context.measureText(label);
       const labelHeight = 24;
@@ -508,7 +665,6 @@ function drawOverlay() {
     }
   }
 
-  requestAnimationFrame(drawOverlay);
 }
 
 function renderDetectionList() {
@@ -565,14 +721,26 @@ elements.confidenceRange.addEventListener("input", (event) => {
   state.confidence = Number(event.target.value);
   elements.confidenceValue.textContent = `${Math.round(state.confidence * 100)}%`;
   sendDetectionConfig();
+  saveSettings();
 });
 
 elements.classFilter.addEventListener("change", () => {
   state.selectedClasses = selectedClasses();
   sendDetectionConfig();
+  saveSettings();
 });
 
+elements.heatmapToggle.addEventListener("change", (event) => {
+  state.showHeatmap = event.target.checked;
+  saveSettings();
+});
+
+elements.fpsRange.addEventListener("change", saveSettings);
+elements.widthRange.addEventListener("change", saveSettings);
+elements.labelToggle.addEventListener("change", saveSettings);
+
 elements.snapshotButton.addEventListener("click", captureSnapshot);
+elements.exportHistoryButton.addEventListener("click", exportHistory);
 elements.clearHistoryButton.addEventListener("click", () => {
   state.history = [];
   renderHistory();
@@ -580,10 +748,18 @@ elements.clearHistoryButton.addEventListener("click", () => {
 
 window.addEventListener("beforeunload", stopCamera);
 window.addEventListener("load", () => {
+  state.heatmapCells = Array.from({ length: 16 * 9 }, () => 0);
+  loadSettings();
   loadModelMetadata();
   if (window.lucide) {
     window.lucide.createIcons();
   }
 });
 
-drawOverlay();
+function renderStage() {
+  drawOverlay();
+  drawHeatmap();
+  requestAnimationFrame(renderStage);
+}
+
+renderStage();

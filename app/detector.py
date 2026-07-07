@@ -49,7 +49,8 @@ def run_detection(
     frame: np.ndarray,
     *,
     confidence: float | None = None,
-    classes: list[str] | None = None,
+    class_filter: list[str] | None = None,
+    tracker: Any | None = None,
 ) -> dict[str, Any]:
     model = load_model()
     threshold = MODEL_CONFIDENCE if confidence is None else float(confidence)
@@ -67,10 +68,10 @@ def run_detection(
     if result.boxes is not None:
         boxes = result.boxes.xyxy.cpu().numpy()
         confidences = result.boxes.conf.cpu().numpy()
-        classes = result.boxes.cls.cpu().numpy().astype(int)
+        class_ids = result.boxes.cls.cpu().numpy().astype(int)
         names = getattr(result, "names", getattr(model, "names", {}))
 
-        for box, confidence, class_id in zip(boxes, confidences, classes):
+        for box, box_confidence, class_id in zip(boxes, confidences, class_ids):
             x1, y1, x2, y2 = box.astype(float)
             x1 = float(np.clip(x1, 0, width))
             y1 = float(np.clip(y1, 0, height))
@@ -78,12 +79,12 @@ def run_detection(
             y2 = float(np.clip(y2, 0, height))
 
             label = _class_name(names, int(class_id))
-            if classes and label not in classes:
+            if class_filter and label not in class_filter:
                 continue
             detections.append(
                 {
                     "label": label,
-                    "confidence": round(float(confidence), 4),
+                    "confidence": round(float(box_confidence), 4),
                     "box": {
                         "x": round(x1, 2),
                         "y": round(y1, 2),
@@ -93,11 +94,19 @@ def run_detection(
                 }
             )
 
+    if tracker is not None:
+        detections = tracker.assign(detections)
+
+    class_counts: dict[str, int] = {}
+    for detection in detections:
+        class_counts[detection["label"]] = class_counts.get(detection["label"], 0) + 1
+
     return {
         "type": "detections",
         "frame_width": width,
         "frame_height": height,
         "confidence_threshold": round(threshold, 4),
+        "class_counts": class_counts,
         "detections": detections,
     }
 
@@ -121,13 +130,15 @@ async def detect_objects(
     frame_bytes: bytes,
     *,
     confidence: float | None = None,
-    classes: list[str] | None = None,
+    class_filter: list[str] | None = None,
+    tracker: Any | None = None,
 ) -> dict[str, Any]:
     frame = decode_jpeg(frame_bytes)
     return await asyncio.to_thread(
         run_detection,
         frame,
         confidence=confidence,
-        classes=classes,
+        class_filter=class_filter,
+        tracker=tracker,
     )
 

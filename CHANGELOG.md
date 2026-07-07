@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0 — 2026-07-07
+
+### Added
+- **Simple IoU object tracking** with stable `track_id` labels on bounding boxes
+- **Detection heatmap** overlay showing where objects appear most often
+- **Class count chips** for live per-class totals
+- **Latency sparkline chart** with rolling average
+- **REST image detect** endpoint (`POST /api/detect`)
+- **Export detection history** as JSON
+- **Settings persistence** via localStorage (confidence, fps, filters, heatmap toggle)
+
+### Fixed
+- Class filter parameter shadowing bug in detection pipeline
+
 ## 1.1.0 — 2026-07-07
 
 ### Added
