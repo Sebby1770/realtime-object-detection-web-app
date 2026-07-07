@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Real-Time Object Detection</title>
-    <link rel="stylesheet" href="/static/styles.css?v=codex-camera-3" />
+    <link rel="stylesheet" href="/static/styles.css?v=1.1.0" />
     <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    <script defer src="/static/app.js?v=codex-camera-3"></script>
+    <script defer src="/static/app.js?v=1.1.0"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -68,6 +68,31 @@
             <span>Show labels</span>
           </label>
 
+          <div class="control-group">
+            <label for="confidenceRange">Confidence threshold</label>
+            <div class="range-row">
+              <input id="confidenceRange" type="range" min="0.1" max="0.9" step="0.05" value="0.35" />
+              <output id="confidenceValue">35%</output>
+            </div>
+          </div>
+
+          <div class="control-group">
+            <label for="classFilter">Class filter</label>
+            <select id="classFilter" multiple size="5"></select>
+            <p class="field-note">Hold Cmd/Ctrl to select multiple classes. Leave empty for all.</p>
+          </div>
+
+          <div class="button-row">
+            <button class="ghost-button" id="snapshotButton" disabled>
+              <i data-lucide="camera"></i>
+              <span>Snapshot</span>
+            </button>
+            <button class="ghost-button" id="clearHistoryButton" disabled>
+              <i data-lucide="history"></i>
+              <span>Clear history</span>
+            </button>
+          </div>
+
           <div class="stats-grid">
             <div class="stat">
               <span>Objects</span>
@@ -83,8 +108,16 @@
             </div>
             <div class="stat">
               <span>Model</span>
-              <strong>YOLOv8n</strong>
+              <strong id="modelName">YOLOv8n</strong>
             </div>
+          </div>
+
+          <div class="detections history-panel">
+            <div class="detections-head">
+              <h2>History</h2>
+              <span id="historyCount">0 events</span>
+            </div>
+            <ul id="historyList"></ul>
           </div>
 
           <div class="detections">

@@ -45,11 +45,17 @@ def _class_name(names: Any, class_id: int) -> str:
         return str(class_id)
 
 
-def run_detection(frame: np.ndarray) -> dict[str, Any]:
+def run_detection(
+    frame: np.ndarray,
+    *,
+    confidence: float | None = None,
+    classes: list[str] | None = None,
+) -> dict[str, Any]:
     model = load_model()
+    threshold = MODEL_CONFIDENCE if confidence is None else float(confidence)
     results = model.predict(
         frame,
-        conf=MODEL_CONFIDENCE,
+        conf=threshold,
         imgsz=MODEL_IMAGE_SIZE,
         verbose=False,
     )
@@ -71,9 +77,12 @@ def run_detection(frame: np.ndarray) -> dict[str, Any]:
             x2 = float(np.clip(x2, 0, width))
             y2 = float(np.clip(y2, 0, height))
 
+            label = _class_name(names, int(class_id))
+            if classes and label not in classes:
+                continue
             detections.append(
                 {
-                    "label": _class_name(names, int(class_id)),
+                    "label": label,
                     "confidence": round(float(confidence), 4),
                     "box": {
                         "x": round(x1, 2),
@@ -88,11 +97,37 @@ def run_detection(frame: np.ndarray) -> dict[str, Any]:
         "type": "detections",
         "frame_width": width,
         "frame_height": height,
+        "confidence_threshold": round(threshold, 4),
         "detections": detections,
     }
 
 
-async def detect_objects(frame_bytes: bytes) -> dict[str, Any]:
+def model_info() -> dict[str, Any]:
+    model = load_model()
+    names = getattr(model, "names", {})
+    if isinstance(names, dict):
+        classes = [str(value) for value in names.values()]
+    else:
+        classes = [str(name) for name in names]
+    return {
+        "model": MODEL_NAME,
+        "confidence_default": MODEL_CONFIDENCE,
+        "image_size": MODEL_IMAGE_SIZE,
+        "classes": classes,
+    }
+
+
+async def detect_objects(
+    frame_bytes: bytes,
+    *,
+    confidence: float | None = None,
+    classes: list[str] | None = None,
+) -> dict[str, Any]:
     frame = decode_jpeg(frame_bytes)
-    return await asyncio.to_thread(run_detection, frame)
+    return await asyncio.to_thread(
+        run_detection,
+        frame,
+        confidence=confidence,
+        classes=classes,
+    )
 

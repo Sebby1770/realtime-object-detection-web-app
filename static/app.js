@@ -18,6 +18,14 @@ const elements = {
   streamFps: document.querySelector("#streamFps"),
   detectionList: document.querySelector("#detectionList"),
   lastUpdated: document.querySelector("#lastUpdated"),
+  confidenceRange: document.querySelector("#confidenceRange"),
+  confidenceValue: document.querySelector("#confidenceValue"),
+  classFilter: document.querySelector("#classFilter"),
+  snapshotButton: document.querySelector("#snapshotButton"),
+  clearHistoryButton: document.querySelector("#clearHistoryButton"),
+  historyList: document.querySelector("#historyList"),
+  historyCount: document.querySelector("#historyCount"),
+  modelName: document.querySelector("#modelName"),
 };
 
 const state = {
@@ -35,6 +43,10 @@ const state = {
   frameSize: { width: 1, height: 1 },
   sentFrames: 0,
   fpsStartedAt: performance.now(),
+  confidence: Number(elements.confidenceRange.value),
+  selectedClasses: [],
+  history: [],
+  modelClasses: [],
 };
 
 const palette = [
@@ -193,6 +205,7 @@ function connectSocket() {
 
   state.socket.addEventListener("open", () => {
     setConnectionStatus("Live", true);
+    sendDetectionConfig();
   });
 
   state.socket.addEventListener("close", () => {
@@ -213,12 +226,13 @@ function connectSocket() {
     state.inFlight = false;
 
     const payload = JSON.parse(event.data);
-    if (payload.type === "error") {
+    if (payload.type === "error" || payload.type === "dropped") {
       elements.lastUpdated.textContent = payload.message;
       return;
     }
 
     state.detections = payload.detections ?? [];
+    recordHistory(payload);
     state.frameSize = {
       width: payload.frame_width || 1,
       height: payload.frame_height || 1,
@@ -262,6 +276,8 @@ async function startCamera() {
   elements.emptyState.classList.add("hidden");
   elements.startCameraSide.disabled = true;
   elements.stopCamera.disabled = false;
+  elements.snapshotButton.disabled = false;
+  elements.clearHistoryButton.disabled = false;
   if (!state.demoMode) {
     elements.lastUpdated.textContent = "Camera connected";
   }
@@ -295,7 +311,94 @@ function stopCamera() {
   elements.emptyState.classList.remove("hidden");
   elements.startCameraSide.disabled = false;
   elements.stopCamera.disabled = true;
+  elements.snapshotButton.disabled = true;
+  elements.clearHistoryButton.disabled = true;
   setConnectionStatus("Offline");
+}
+
+function sendDetectionConfig() {
+  if (state.socket?.readyState !== WebSocket.OPEN) return;
+  state.socket.send(
+    JSON.stringify({
+      type: "config",
+      confidence: state.confidence,
+      classes: state.selectedClasses,
+    }),
+  );
+}
+
+function selectedClasses() {
+  return Array.from(elements.classFilter.selectedOptions).map((option) => option.value);
+}
+
+function populateClassFilter(classes) {
+  state.modelClasses = classes;
+  elements.classFilter.replaceChildren(
+    ...classes.map((label) => {
+      const option = document.createElement("option");
+      option.value = label;
+      option.textContent = label;
+      return option;
+    }),
+  );
+}
+
+async function loadModelMetadata() {
+  try {
+    const response = await fetch("/api/model");
+    const payload = await response.json();
+    elements.modelName.textContent = payload.model || "YOLOv8n";
+    populateClassFilter(payload.classes || []);
+  } catch {
+    elements.modelName.textContent = "YOLOv8n";
+  }
+}
+
+function recordHistory(payload) {
+  if (!payload.detections?.length) return;
+  const stamp = new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const labels = payload.detections.map((item) => item.label).join(", ");
+  state.history = [{ stamp, labels, count: payload.detections.length }, ...state.history].slice(0, 12);
+  renderHistory();
+}
+
+function renderHistory() {
+  elements.historyCount.textContent = `${state.history.length} events`;
+  elements.historyList.replaceChildren(
+    ...state.history.map((entry) => {
+      const row = document.createElement("li");
+      const time = document.createElement("span");
+      const detail = document.createElement("span");
+      time.className = "history-time";
+      time.textContent = entry.stamp;
+      detail.className = "history-detail";
+      detail.textContent = `${entry.count} objects · ${entry.labels}`;
+      row.append(time, detail);
+      return row;
+    }),
+  );
+}
+
+function captureSnapshot() {
+  const { context, width, height } = resizeOverlay();
+  const source = state.demoMode ? state.demoCanvas : elements.video;
+  if (!source) return;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const snapshotContext = canvas.getContext("2d");
+  snapshotContext.drawImage(source, 0, 0, width, height);
+  snapshotContext.drawImage(elements.overlay, 0, 0, width, height);
+
+  const link = document.createElement("a");
+  link.download = `detection-snapshot-${Date.now()}.png`;
+  link.href = canvas.toDataURL("image/png");
+  link.click();
 }
 
 function captureLoop() {
@@ -458,8 +561,26 @@ elements.labelToggle.addEventListener("change", (event) => {
   state.showLabels = event.target.checked;
 });
 
+elements.confidenceRange.addEventListener("input", (event) => {
+  state.confidence = Number(event.target.value);
+  elements.confidenceValue.textContent = `${Math.round(state.confidence * 100)}%`;
+  sendDetectionConfig();
+});
+
+elements.classFilter.addEventListener("change", () => {
+  state.selectedClasses = selectedClasses();
+  sendDetectionConfig();
+});
+
+elements.snapshotButton.addEventListener("click", captureSnapshot);
+elements.clearHistoryButton.addEventListener("click", () => {
+  state.history = [];
+  renderHistory();
+});
+
 window.addEventListener("beforeunload", stopCamera);
 window.addEventListener("load", () => {
+  loadModelMetadata();
   if (window.lucide) {
     window.lucide.createIcons();
   }

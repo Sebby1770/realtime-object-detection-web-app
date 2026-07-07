@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from pathlib import Path
@@ -8,7 +9,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.detector import detect_objects
+from app.detector import detect_objects, model_info
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -25,7 +26,7 @@ ACTIVE_CONNECTIONS = 0
 app = FastAPI(
     title="Real-Time Object Detection",
     description="FastAPI, WebSockets, OpenCV, and YOLOv8 live object detection.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -37,8 +38,18 @@ async def index() -> FileResponse:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, str | int]:
+    return {
+        "status": "ok",
+        "version": "1.1.0",
+        "active_connections": ACTIVE_CONNECTIONS,
+        "max_connections": MAX_WS_CONNECTIONS,
+    }
+
+
+@app.get("/api/model")
+async def model_metadata() -> dict[str, object]:
+    return model_info()
 
 
 def allowed_origins() -> set[str]:
@@ -70,13 +81,45 @@ async def detect_socket(websocket: WebSocket) -> None:
     await websocket.accept()
     ACTIVE_CONNECTIONS += 1
     last_frame_at = 0.0
+    confidence_threshold: float | None = None
+    class_filter: list[str] | None = None
+    processing = False
 
     try:
         while True:
-            frame = await websocket.receive_bytes()
+            message = await websocket.receive()
             started = time.perf_counter()
 
+            if message.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect()
+
+            if "text" in message and message["text"]:
+                try:
+                    payload = json.loads(message["text"])
+                except json.JSONDecodeError:
+                    continue
+                if payload.get("type") == "config":
+                    if "confidence" in payload:
+                        confidence_threshold = float(payload["confidence"])
+                    if "classes" in payload:
+                        class_filter = [str(value) for value in payload["classes"]]
+                    await websocket.send_json({"type": "config_ack", "ok": True})
+                continue
+
+            frame = message.get("bytes")
+            if not frame:
+                continue
+
             try:
+                if processing:
+                    await websocket.send_json(
+                        {
+                            "type": "dropped",
+                            "message": "Previous frame still processing.",
+                        }
+                    )
+                    continue
+
                 if len(frame) > MAX_FRAME_BYTES:
                     await websocket.send_json(
                         {
@@ -95,16 +138,22 @@ async def detect_socket(websocket: WebSocket) -> None:
                     )
                     continue
                 last_frame_at = started
-
-                payload = await detect_objects(frame)
+                processing = True
+                payload = await detect_objects(
+                    frame,
+                    confidence=confidence_threshold,
+                    classes=class_filter,
+                )
                 payload["latency_ms"] = round(
                     (time.perf_counter() - started) * 1000,
                     1,
                 )
                 await websocket.send_json(payload)
+                processing = False
             except WebSocketDisconnect:
                 raise
             except Exception:
+                processing = False
                 try:
                     await websocket.send_json(
                         {
