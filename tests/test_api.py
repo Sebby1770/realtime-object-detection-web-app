@@ -19,7 +19,7 @@ def test_health_endpoint() -> None:
     assert body["status"] == "ok"
     assert body["mock"] is True
     assert body["model"] == "mock"
-    assert body["version"] == __version__ == "2.0.0"
+    assert body["version"] == __version__ == "2.1.0"
 
 
 def test_config_and_classes_endpoints() -> None:

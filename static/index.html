@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#09090b" />
-    <title>Detection Console · v2</title>
+    <title>Detection Console · v2.1</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
     <script defer src="/static/detect-utils.js"></script>
@@ -20,7 +20,7 @@
             <p class="eyebrow">Realtime command center</p>
             <h1>Object Detection</h1>
           </div>
-          <span class="version-chip">v2.0</span>
+          <span class="version-chip">v2.1</span>
         </div>
         <div class="topbar-meta">
           <div class="status-pill" id="connectionStatus">
@@ -50,27 +50,40 @@
                 <span id="hudObjects">0 obj</span>
                 <span id="hudLatency">-- ms</span>
                 <span id="hudFps">-- fps</span>
+                <span id="hudReel" class="hud-reel hidden">REEL</span>
               </div>
               <div class="stage-message" id="emptyState">
                 <p class="eyebrow">Camera idle</p>
                 <h2>Start a private live stream</h2>
                 <p>
                   JPEG frames stay in memory on this machine. Nothing is written to disk
-                  or uploaded to object storage.
+                  or uploaded to object storage. No webcam? Play the sample reel.
                 </p>
-                <button class="primary-button" id="startCamera" type="button">
-                  <i data-lucide="video"></i>
-                  <span>Start camera</span>
-                </button>
+                <div class="stage-actions">
+                  <button class="primary-button" id="startCamera" type="button">
+                    <i data-lucide="video"></i>
+                    <span>Start camera</span>
+                  </button>
+                  <button class="ghost-button" id="startReel" type="button">
+                    <i data-lucide="film"></i>
+                    <span>Play sample reel</span>
+                  </button>
+                </div>
               </div>
               <div class="stage-message hidden" id="errorState">
                 <p class="eyebrow danger" id="errorEyebrow">Camera error</p>
                 <h2 id="errorTitle">Could not open the camera</h2>
                 <p id="errorBody">Check permissions and try again.</p>
-                <button class="primary-button" id="retryCamera" type="button">
-                  <i data-lucide="refresh-cw"></i>
-                  <span>Try again</span>
-                </button>
+                <div class="stage-actions">
+                  <button class="primary-button" id="retryCamera" type="button">
+                    <i data-lucide="refresh-cw"></i>
+                    <span>Try again</span>
+                  </button>
+                  <button class="ghost-button" id="startReelError" type="button">
+                    <i data-lucide="film"></i>
+                    <span>Play sample reel instead</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -78,6 +91,10 @@
             <button class="primary-button" id="startCameraSide" type="button">
               <i data-lucide="play"></i>
               <span>Start</span>
+            </button>
+            <button class="ghost-button" id="startReelSide" type="button">
+              <i data-lucide="film"></i>
+              <span>Play sample reel</span>
             </button>
             <button class="ghost-button" id="stopCamera" type="button" disabled>
               <i data-lucide="square"></i>
@@ -90,6 +107,18 @@
             <button class="ghost-button" id="snapshotBtn" type="button" disabled>
               <i data-lucide="camera"></i>
               <span>Snapshot</span>
+            </button>
+            <button class="ghost-button" id="recordBtn" type="button" title="Record session (R)">
+              <i data-lucide="circle"></i>
+              <span>Record</span>
+            </button>
+            <button class="ghost-button" id="zoneBtn" type="button" title="Draw zone (Z)" aria-pressed="false">
+              <i data-lucide="scan"></i>
+              <span>Draw zone</span>
+            </button>
+            <button class="ghost-button" id="clearZoneBtn" type="button" disabled>
+              <i data-lucide="eraser"></i>
+              <span>Clear zone</span>
             </button>
           </div>
         </div>
@@ -119,6 +148,13 @@
               <div class="range-row">
                 <input id="widthRange" type="range" min="320" max="960" step="80" value="640" />
                 <output id="widthValue">640 px</output>
+              </div>
+            </div>
+            <div class="control-group">
+              <label for="qualityRange">JPEG quality</label>
+              <div class="range-row">
+                <input id="qualityRange" type="range" min="0.4" max="0.95" step="0.01" value="0.72" />
+                <output id="qualityValue">0.72</output>
               </div>
             </div>
             <div class="control-group">
@@ -174,6 +210,14 @@
                 <span>Infer</span>
                 <strong id="inferMs">--</strong>
               </div>
+              <div class="stat">
+                <span>Busy</span>
+                <strong id="busyCount">0</strong>
+              </div>
+              <div class="stat">
+                <span>Dropped</span>
+                <strong id="droppedCount">0</strong>
+              </div>
             </div>
             <div class="spark-wrap">
               <div class="spark-head">
@@ -189,6 +233,21 @@
               </div>
               <ul id="histogramList"></ul>
             </div>
+          </section>
+
+          <section class="rail-card">
+            <header>
+              <h2>Session</h2>
+              <span class="hint" id="recordHint">0 events</span>
+            </header>
+            <div class="session-actions">
+              <button class="ghost-button" id="exportJsonBtn" type="button" disabled>Export JSON</button>
+              <button class="ghost-button" id="exportCsvBtn" type="button" disabled>Export CSV</button>
+              <button class="ghost-button" id="clearRecordBtn" type="button" disabled>Clear</button>
+            </div>
+            <p class="privacy-note">
+              Events stay in this tab (last 2000). The server never stores frames or recordings.
+            </p>
           </section>
 
           <section class="rail-card">
@@ -223,10 +282,12 @@
           </button>
         </header>
         <dl>
-          <div><dt><kbd>Space</kbd></dt><dd>Start or stop the camera</dd></div>
+          <div><dt><kbd>Space</kbd></dt><dd>Start camera or stop the live session</dd></div>
           <div><dt><kbd>S</kbd></dt><dd>Snapshot of video + boxes</dd></div>
           <div><dt><kbd>L</kbd></dt><dd>Toggle labels</dd></div>
           <div><dt><kbd>M</kbd></dt><dd>Mute or unmute alerts</dd></div>
+          <div><dt><kbd>R</kbd></dt><dd>Start or stop session recording</dd></div>
+          <div><dt><kbd>Z</kbd></dt><dd>Toggle draw zone</dd></div>
           <div><dt><kbd>?</kbd></dt><dd>Show this overlay</dd></div>
         </dl>
       </form>

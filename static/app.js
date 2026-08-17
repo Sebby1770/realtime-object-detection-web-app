@@ -1,10 +1,14 @@
-const { colorForLabel, formatCounts } = window.DetectUtils;
+const { colorForLabel, formatCounts, boxCenter, pointInRect, eventsToCsv } = window.DetectUtils;
 
 const SNAPSHOT_KEY = "rod-v2-snapshots";
 const PREFS_KEY = "rod-v2-prefs";
 const MAX_SNAPSHOTS = 12;
 const MAX_STORE_CHARS = 1_600_000;
 const MAX_LATENCIES = 40;
+const MAX_RECORD_EVENTS = 2000;
+const MIN_JPEG_QUALITY = 0.4;
+const MAX_JPEG_QUALITY = 0.95;
+const DEFAULT_JPEG_QUALITY = 0.72;
 
 const elements = {
   video: document.querySelector("#video"),
@@ -18,11 +22,21 @@ const elements = {
   errorBody: document.querySelector("#errorBody"),
   startCamera: document.querySelector("#startCamera"),
   startCameraSide: document.querySelector("#startCameraSide"),
+  startReel: document.querySelector("#startReel"),
+  startReelSide: document.querySelector("#startReelSide"),
+  startReelError: document.querySelector("#startReelError"),
   retryCamera: document.querySelector("#retryCamera"),
   stopCamera: document.querySelector("#stopCamera"),
   facingBtn: document.querySelector("#facingBtn"),
   facingLabel: document.querySelector("#facingLabel"),
   snapshotBtn: document.querySelector("#snapshotBtn"),
+  recordBtn: document.querySelector("#recordBtn"),
+  zoneBtn: document.querySelector("#zoneBtn"),
+  clearZoneBtn: document.querySelector("#clearZoneBtn"),
+  exportJsonBtn: document.querySelector("#exportJsonBtn"),
+  exportCsvBtn: document.querySelector("#exportCsvBtn"),
+  clearRecordBtn: document.querySelector("#clearRecordBtn"),
+  recordHint: document.querySelector("#recordHint"),
   connectionStatus: document.querySelector("#connectionStatus"),
   modelBadge: document.querySelector("#modelBadge"),
   mockBadge: document.querySelector("#mockBadge"),
@@ -32,6 +46,8 @@ const elements = {
   fpsValue: document.querySelector("#fpsValue"),
   widthRange: document.querySelector("#widthRange"),
   widthValue: document.querySelector("#widthValue"),
+  qualityRange: document.querySelector("#qualityRange"),
+  qualityValue: document.querySelector("#qualityValue"),
   confidenceRange: document.querySelector("#confidenceRange"),
   confidenceValue: document.querySelector("#confidenceValue"),
   imgszSelect: document.querySelector("#imgszSelect"),
@@ -40,6 +56,8 @@ const elements = {
   latency: document.querySelector("#latency"),
   inferMs: document.querySelector("#inferMs"),
   streamFps: document.querySelector("#streamFps"),
+  busyCount: document.querySelector("#busyCount"),
+  droppedCount: document.querySelector("#droppedCount"),
   detectionList: document.querySelector("#detectionList"),
   lastUpdated: document.querySelector("#lastUpdated"),
   countsLine: document.querySelector("#countsLine"),
@@ -57,25 +75,31 @@ const elements = {
   hudObjects: document.querySelector("#hudObjects"),
   hudLatency: document.querySelector("#hudLatency"),
   hudFps: document.querySelector("#hudFps"),
+  hudReel: document.querySelector("#hudReel"),
 };
 
 const state = {
   stream: null,
   socket: null,
   running: false,
+  mode: "idle",
   inFlight: false,
   targetFps: Number(elements.fpsRange.value),
   processingWidth: Number(elements.widthRange.value),
+  jpegQuality: DEFAULT_JPEG_QUALITY,
   confidence: Number(elements.confidenceRange.value),
   imgsz: Number(elements.imgszSelect.value),
   showLabels: true,
   muted: false,
   facingMode: "environment",
   canFlipCamera: false,
+  rawDetections: [],
   detections: [],
   frameSize: { width: 1, height: 1 },
   sentFrames: 0,
   fpsStartedAt: performance.now(),
+  busyFrames: 0,
+  droppedFrames: 0,
   classes: [],
   classQuery: "",
   allowedLabels: new Set(),
@@ -86,7 +110,21 @@ const state = {
   snapshots: [],
   configTimer: 0,
   audioCtx: null,
+  drawingZone: false,
+  zone: null,
+  zoneDraft: null,
+  recording: false,
+  recordStartedAt: 0,
+  recordEvents: [],
 };
+
+function clampQuality(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) {
+    return DEFAULT_JPEG_QUALITY;
+  }
+  return Math.min(MAX_JPEG_QUALITY, Math.max(MIN_JPEG_QUALITY, next));
+}
 
 function loadPrefs() {
   try {
@@ -104,6 +142,8 @@ function savePrefs() {
       showLabels: state.showLabels,
       confidence: state.confidence,
       facingMode: state.facingMode,
+      quality: state.jpegQuality,
+      watchlist: [...state.watchlist],
     }),
   );
 }
@@ -175,6 +215,8 @@ function connectSocket() {
     const payload = JSON.parse(event.data);
     if (payload.type === "busy") {
       state.inFlight = false;
+      state.busyFrames += 1;
+      updateDropUi();
       return;
     }
     if (payload.type === "config_ack") {
@@ -187,34 +229,93 @@ function connectSocket() {
     }
 
     state.inFlight = false;
-    state.detections = payload.detections ?? [];
-    state.frameSize = {
-      width: payload.frame_width || 1,
-      height: payload.frame_height || 1,
-    };
-    const count = state.detections.length;
-    elements.objectCount.textContent = String(count);
-    elements.latency.textContent = `${payload.latency_ms ?? "--"} ms`;
-    elements.inferMs.textContent = `${payload.inference_ms ?? "--"} ms`;
-    elements.hudObjects.textContent = `${count} obj`;
-    elements.hudLatency.textContent = `${payload.latency_ms ?? "--"} ms`;
-    elements.countsLine.textContent = formatCounts(payload.counts || {});
-    elements.lastUpdated.textContent = new Date().toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-    if (typeof payload.latency_ms === "number") {
-      state.latencies.push(payload.latency_ms);
-      if (state.latencies.length > MAX_LATENCIES) {
-        state.latencies.shift();
-      }
-      drawSparkline();
-    }
-    accumulateHistogram(payload.counts || {});
-    handleAlerts(payload.alerts || []);
-    renderDetectionList();
+    applyDetectionPayload(payload);
   });
+}
+
+function countLabels(detections) {
+  const counts = {};
+  for (const detection of detections) {
+    const label = detection.label || "unknown";
+    counts[label] = (counts[label] || 0) + 1;
+  }
+  return counts;
+}
+
+function detectionsWithZone(detections) {
+  if (!state.zone) {
+    return detections.map((detection) => ({ ...detection, inZone: true }));
+  }
+  const frameWidth = state.frameSize.width || 1;
+  const frameHeight = state.frameSize.height || 1;
+  return detections.map((detection) => {
+    const center = boxCenter(detection.box || {});
+    const point = { x: center.x / frameWidth, y: center.y / frameHeight };
+    return { ...detection, inZone: pointInRect(point, state.zone) };
+  });
+}
+
+function applyCurrentDetections() {
+  state.detections = detectionsWithZone(state.rawDetections);
+  const visible = state.zone ? state.detections.filter((item) => item.inZone) : state.detections;
+  elements.countsLine.textContent = formatCounts(countLabels(visible));
+  updateCountReadout();
+  renderDetectionList();
+}
+
+function applyDetectionPayload(payload) {
+  state.rawDetections = payload.detections ?? [];
+  state.frameSize = {
+    width: payload.frame_width || 1,
+    height: payload.frame_height || 1,
+  };
+  state.detections = detectionsWithZone(state.rawDetections);
+  const visible = state.zone ? state.detections.filter((item) => item.inZone) : state.detections;
+  const counts = countLabels(visible);
+  const alerts = state.zone
+    ? (payload.alerts || []).filter((alert) =>
+        visible.some((item) => item.label === alert.label),
+      )
+    : payload.alerts || [];
+
+  updateCountReadout();
+  elements.latency.textContent = `${payload.latency_ms ?? "--"} ms`;
+  elements.inferMs.textContent = `${payload.inference_ms ?? "--"} ms`;
+  elements.hudLatency.textContent = `${payload.latency_ms ?? "--"} ms`;
+  elements.countsLine.textContent = formatCounts(counts);
+  elements.lastUpdated.textContent = new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  if (typeof payload.latency_ms === "number") {
+    state.latencies.push(payload.latency_ms);
+    if (state.latencies.length > MAX_LATENCIES) {
+      state.latencies.shift();
+    }
+    drawSparkline();
+  }
+  accumulateHistogram(counts);
+  handleAlerts(alerts);
+  renderDetectionList();
+  recordEvent(payload, visible, counts, alerts);
+}
+
+function updateCountReadout() {
+  const total = state.detections.length;
+  const inZone = state.detections.filter((item) => item.inZone !== false).length;
+  if (state.zone) {
+    elements.objectCount.textContent = `${inZone} / ${total}`;
+    elements.hudObjects.textContent = `${inZone}/${total} obj`;
+  } else {
+    elements.objectCount.textContent = String(total);
+    elements.hudObjects.textContent = `${total} obj`;
+  }
+}
+
+function updateDropUi() {
+  elements.busyCount.textContent = String(state.busyFrames);
+  elements.droppedCount.textContent = String(state.droppedFrames);
 }
 
 function showStage(mode) {
@@ -242,6 +343,28 @@ function showCameraError(kind, detail) {
   showStage("error");
 }
 
+function setTransportButtons(running) {
+  elements.startCameraSide.disabled = running;
+  elements.startReelSide.disabled = running;
+  elements.stopCamera.disabled = !running;
+  elements.snapshotBtn.disabled = !running;
+}
+
+function resetLiveReadout() {
+  state.rawDetections = [];
+  state.detections = [];
+  renderDetectionList();
+  elements.objectCount.textContent = "0";
+  elements.latency.textContent = "--";
+  elements.inferMs.textContent = "--";
+  elements.streamFps.textContent = "--";
+  elements.hudObjects.textContent = "0 obj";
+  elements.hudLatency.textContent = "-- ms";
+  elements.hudFps.textContent = "-- fps";
+  elements.countsLine.textContent = "none";
+  elements.lastUpdated.textContent = "Idle";
+}
+
 async function refreshCameraOptions() {
   if (!navigator.mediaDevices?.enumerateDevices) {
     return;
@@ -251,6 +374,22 @@ async function refreshCameraOptions() {
   state.canFlipCamera = cameras.length > 1;
   elements.facingBtn.hidden = !state.canFlipCamera;
   elements.facingLabel.textContent = state.facingMode === "user" ? "Front" : "Rear";
+}
+
+function beginLiveSession(mode) {
+  state.mode = mode;
+  state.running = true;
+  state.inFlight = false;
+  state.busyFrames = 0;
+  state.droppedFrames = 0;
+  state.sentFrames = 0;
+  state.fpsStartedAt = performance.now();
+  updateDropUi();
+  showStage("live");
+  elements.hudReel.classList.toggle("hidden", mode !== "reel");
+  setTransportButtons(true);
+  connectSocket();
+  captureLoop();
 }
 
 async function startCamera() {
@@ -290,18 +429,22 @@ async function startCamera() {
     elements.videoStage.style.aspectRatio = `${elements.video.videoWidth} / ${elements.video.videoHeight}`;
   }
 
-  state.running = true;
-  showStage("live");
-  elements.startCameraSide.disabled = true;
-  elements.stopCamera.disabled = false;
-  elements.snapshotBtn.disabled = false;
   await refreshCameraOptions();
-  connectSocket();
-  captureLoop();
+  beginLiveSession("camera");
+}
+
+function startReel() {
+  if (state.running) {
+    return;
+  }
+  elements.videoStage.style.aspectRatio = "16 / 9";
+  elements.facingBtn.hidden = true;
+  beginLiveSession("reel");
 }
 
 function stopCamera() {
   state.running = false;
+  state.mode = "idle";
   state.inFlight = false;
 
   if (state.socket) {
@@ -315,33 +458,69 @@ function stopCamera() {
   }
 
   elements.video.srcObject = null;
-  state.detections = [];
-  renderDetectionList();
-  elements.objectCount.textContent = "0";
-  elements.latency.textContent = "--";
-  elements.inferMs.textContent = "--";
-  elements.streamFps.textContent = "--";
-  elements.countsLine.textContent = "none";
-  elements.lastUpdated.textContent = "Idle";
-  elements.startCameraSide.disabled = false;
-  elements.stopCamera.disabled = true;
-  elements.snapshotBtn.disabled = true;
+  elements.hudReel.classList.add("hidden");
+  resetLiveReadout();
+  setTransportButtons(false);
   setConnectionStatus("Offline");
   showStage("empty");
 }
 
 async function toggleFacing() {
+  if (state.mode === "reel") {
+    return;
+  }
   state.facingMode = state.facingMode === "environment" ? "user" : "environment";
   elements.facingLabel.textContent = state.facingMode === "user" ? "Front" : "Rear";
   savePrefs();
   if (!state.running) {
     return;
   }
-  const wasRunning = true;
   stopCamera();
-  if (wasRunning) {
-    await startCamera();
+  await startCamera();
+}
+
+function drawReelScene(canvas, width, height) {
+  const context = canvas.getContext("2d");
+  canvas.width = width;
+  canvas.height = height;
+  context.fillStyle = "#0a0c10";
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = "rgba(255,255,255,0.045)";
+  context.lineWidth = 1;
+  for (let x = 32; x < width; x += 32) {
+    context.beginPath();
+    context.moveTo(x + 0.5, 0);
+    context.lineTo(x + 0.5, height);
+    context.stroke();
   }
+  for (let y = 32; y < height; y += 32) {
+    context.beginPath();
+    context.moveTo(0, y + 0.5);
+    context.lineTo(width, y + 0.5);
+    context.stroke();
+  }
+
+  const t = prefersReducedMotion() ? 0 : performance.now() / 1000;
+  const actors = [
+    { label: "person", color: "#38d6c6", x: 0.08, y: 0.12, w: 0.28, h: 0.78, dx: 0.03, dy: 0.02 },
+    { label: "cup", color: "#f5c84b", x: 0.4, y: 0.48, w: 0.16, h: 0.22, dx: 0.05, dy: 0.04 },
+    { label: "laptop", color: "#c084fc", x: 0.55, y: 0.4, w: 0.38, h: 0.42, dx: 0.02, dy: 0.03 },
+  ];
+  actors.forEach((actor, index) => {
+    const shiftX = actor.dx * Math.sin(t * (0.7 + index * 0.2));
+    const shiftY = actor.dy * Math.cos(t * (0.55 + index * 0.18));
+    const x = (actor.x + shiftX) * width;
+    const y = (actor.y + shiftY) * height;
+    const boxWidth = actor.w * width;
+    const boxHeight = actor.h * height;
+    context.globalAlpha = 0.88;
+    context.fillStyle = actor.color;
+    context.fillRect(x, y, boxWidth, boxHeight);
+    context.globalAlpha = 1;
+    context.fillStyle = "#071111";
+    context.font = `700 ${Math.max(12, Math.round(width * 0.028))}px system-ui, sans-serif`;
+    context.fillText(actor.label, x + 8, y + 18);
+  });
 }
 
 function captureLoop() {
@@ -352,26 +531,36 @@ function captureLoop() {
   const delay = 1000 / state.targetFps;
   window.setTimeout(captureLoop, delay);
 
-  if (
-    state.inFlight ||
-    state.socket?.readyState !== WebSocket.OPEN ||
-    elements.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
-  ) {
+  if (state.socket?.readyState !== WebSocket.OPEN) {
     return;
   }
 
-  const sourceWidth = elements.video.videoWidth;
-  const sourceHeight = elements.video.videoHeight;
-  if (!sourceWidth || !sourceHeight) {
+  if (state.inFlight) {
+    state.droppedFrames += 1;
+    updateDropUi();
     return;
   }
-  const width = Math.min(state.processingWidth, sourceWidth);
-  const height = Math.round(width * (sourceHeight / sourceWidth));
+
   const canvas = elements.captureCanvas;
-
-  canvas.width = width;
-  canvas.height = height;
-  canvas.getContext("2d").drawImage(elements.video, 0, 0, width, height);
+  if (state.mode === "reel") {
+    const width = state.processingWidth;
+    const height = Math.max(1, Math.round((width * 9) / 16));
+    drawReelScene(canvas, width, height);
+  } else {
+    if (elements.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return;
+    }
+    const sourceWidth = elements.video.videoWidth;
+    const sourceHeight = elements.video.videoHeight;
+    if (!sourceWidth || !sourceHeight) {
+      return;
+    }
+    const width = Math.min(state.processingWidth, sourceWidth);
+    const height = Math.round(width * (sourceHeight / sourceWidth));
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext("2d").drawImage(elements.video, 0, 0, width, height);
+  }
 
   state.inFlight = true;
   canvas.toBlob(
@@ -384,7 +573,7 @@ function captureLoop() {
       trackClientFps();
     },
     "image/jpeg",
-    0.72,
+    state.jpegQuality,
   );
 }
 
@@ -398,6 +587,71 @@ function trackClientFps() {
     state.sentFrames = 0;
     state.fpsStartedAt = performance.now();
   }
+}
+
+function normalizeRect(rect) {
+  const x = Math.min(rect.x, rect.x + rect.width);
+  const y = Math.min(rect.y, rect.y + rect.height);
+  return { x, y, width: Math.abs(rect.width), height: Math.abs(rect.height) };
+}
+
+function overlayPoint(event) {
+  const rect = elements.overlay.getBoundingClientRect();
+  const width = rect.width || 1;
+  const height = rect.height || 1;
+  return {
+    x: (event.clientX - rect.left) / width,
+    y: (event.clientY - rect.top) / height,
+  };
+}
+
+function setDrawingZone(next) {
+  state.drawingZone = Boolean(next);
+  if (!state.drawingZone) {
+    state.zoneDraft = null;
+  }
+  elements.overlay.classList.toggle("interactive", state.drawingZone);
+  elements.zoneBtn.setAttribute("aria-pressed", String(state.drawingZone));
+}
+
+function clearZone() {
+  state.zone = null;
+  state.zoneDraft = null;
+  elements.clearZoneBtn.disabled = true;
+  applyCurrentDetections();
+}
+
+function commitZoneDraft() {
+  if (!state.zoneDraft) {
+    return;
+  }
+  const rect = normalizeRect(state.zoneDraft);
+  state.zoneDraft = null;
+  if (rect.width < 0.02 || rect.height < 0.02) {
+    return;
+  }
+  state.zone = rect;
+  elements.clearZoneBtn.disabled = false;
+  applyCurrentDetections();
+}
+
+function paintZone(context, viewWidth, viewHeight) {
+  const source = state.zoneDraft ? normalizeRect(state.zoneDraft) : state.zone;
+  if (!source || source.width <= 0 || source.height <= 0) {
+    return;
+  }
+  const x = source.x * viewWidth;
+  const y = source.y * viewHeight;
+  const width = source.width * viewWidth;
+  const height = source.height * viewHeight;
+  context.save();
+  context.fillStyle = "rgba(56, 214, 198, 0.08)";
+  context.strokeStyle = "#38d6c6";
+  context.lineWidth = 2;
+  context.setLineDash([8, 5]);
+  context.fillRect(x, y, width, height);
+  context.strokeRect(x, y, width, height);
+  context.restore();
 }
 
 function resizeOverlay() {
@@ -428,7 +682,13 @@ function paintDetections(context, viewWidth, viewHeight, frameWidth, frameHeight
     const boxHeight = box.height * yScale;
     const color = colorForLabel(detection.label);
     const watched = state.watchlist.has(detection.label);
+    const inZone = detection.inZone !== false;
 
+    context.save();
+    context.globalAlpha = inZone ? 1 : 0.28;
+    if (!inZone) {
+      context.setLineDash([5, 4]);
+    }
     context.lineWidth = Math.max(2, Math.min(viewWidth, viewHeight) * 0.004);
     context.strokeStyle = watched ? "#ff6f59" : color;
     context.fillStyle = context.strokeStyle;
@@ -445,12 +705,17 @@ function paintDetections(context, viewWidth, viewHeight, frameWidth, frameHeight
       context.fillStyle = "#071111";
       context.fillText(label, x + 7, labelY + 15);
     }
+    context.restore();
   }
 }
 
 function drawOverlay() {
   const { context, width, height } = resizeOverlay();
   context.clearRect(0, 0, width, height);
+  if (state.mode === "reel" && elements.captureCanvas.width) {
+    context.drawImage(elements.captureCanvas, 0, 0, width, height);
+  }
+  paintZone(context, width, height);
   paintDetections(context, width, height, state.frameSize.width, state.frameSize.height);
   requestAnimationFrame(drawOverlay);
 }
@@ -470,6 +735,9 @@ function renderDetectionList() {
       label.textContent = detection.label;
       confidence.className = "confidence";
       confidence.textContent = `${Math.round(detection.confidence * 100)}%`;
+      if (detection.inZone === false) {
+        row.classList.add("dim");
+      }
       row.append(swatch, label, confidence);
       return row;
     });
@@ -544,6 +812,7 @@ function toggleWatch(name) {
   }
   renderClassCloud();
   scheduleConfig();
+  savePrefs();
 }
 
 function accumulateHistogram(counts) {
@@ -679,6 +948,87 @@ function renderAlertLog() {
   elements.alertLog.replaceChildren(...rows);
 }
 
+function updateRecordUi() {
+  const count = state.recordEvents.length;
+  elements.recordHint.textContent = state.recording ? `REC · ${count}` : `${count} events`;
+  elements.recordBtn.setAttribute("aria-pressed", String(state.recording));
+  const label = elements.recordBtn.querySelector("span");
+  if (label) {
+    label.textContent = state.recording ? "Recording" : "Record";
+  }
+  elements.exportJsonBtn.disabled = count === 0;
+  elements.exportCsvBtn.disabled = count === 0;
+  elements.clearRecordBtn.disabled = count === 0 && !state.recording;
+}
+
+function toggleRecord() {
+  state.recording = !state.recording;
+  if (state.recording && (!state.recordStartedAt || state.recordEvents.length === 0)) {
+    state.recordStartedAt = Date.now();
+  }
+  updateRecordUi();
+}
+
+function clearRecording() {
+  state.recordEvents = [];
+  state.recordStartedAt = state.recording ? Date.now() : 0;
+  updateRecordUi();
+}
+
+function recordEvent(payload, detections, counts, alerts) {
+  if (!state.recording) {
+    return;
+  }
+  if (!state.recordStartedAt) {
+    state.recordStartedAt = Date.now();
+  }
+  state.recordEvents.push({
+    t: Math.round(Date.now() - state.recordStartedAt),
+    frame_id: payload.frame_id ?? null,
+    detections: detections.map((detection) => ({
+      label: detection.label,
+      confidence: detection.confidence,
+      box: detection.box,
+    })),
+    counts,
+    alerts: (alerts || []).map((alert) => ({
+      label: alert.label,
+      confidence: alert.confidence,
+    })),
+    latency_ms: payload.latency_ms ?? null,
+  });
+  if (state.recordEvents.length > MAX_RECORD_EVENTS) {
+    state.recordEvents.splice(0, state.recordEvents.length - MAX_RECORD_EVENTS);
+  }
+  updateRecordUi();
+}
+
+function downloadText(text, filename, mime) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportRecording(kind) {
+  if (!state.recordEvents.length) {
+    return;
+  }
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  if (kind === "json") {
+    downloadText(
+      JSON.stringify(state.recordEvents),
+      `detect-session-${stamp}.json`,
+      "application/json",
+    );
+    return;
+  }
+  downloadText(eventsToCsv(state.recordEvents), `detect-session-${stamp}.csv`, "text/csv");
+}
+
 function loadSnapshots() {
   try {
     const parsed = JSON.parse(localStorage.getItem(SNAPSHOT_KEY) || "[]");
@@ -726,16 +1076,35 @@ function downloadDataUrl(dataUrl, filename) {
 }
 
 function captureSnapshot() {
-  if (!state.running || elements.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+  if (!state.running) {
     return;
   }
-  const width = elements.video.videoWidth;
-  const height = elements.video.videoHeight;
   const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
   const context = canvas.getContext("2d");
-  context.drawImage(elements.video, 0, 0, width, height);
+  let width = 0;
+  let height = 0;
+
+  if (state.mode === "reel") {
+    width = elements.captureCanvas.width;
+    height = elements.captureCanvas.height;
+    if (!width || !height) {
+      return;
+    }
+    canvas.width = width;
+    canvas.height = height;
+    context.drawImage(elements.captureCanvas, 0, 0, width, height);
+  } else {
+    if (elements.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return;
+    }
+    width = elements.video.videoWidth;
+    height = elements.video.videoHeight;
+    canvas.width = width;
+    canvas.height = height;
+    context.drawImage(elements.video, 0, 0, width, height);
+  }
+
+  paintZone(context, width, height);
   paintDetections(context, width, height, state.frameSize.width, state.frameSize.height);
   const dataUrl = canvas.toDataURL("image/png");
   const record = { id: Date.now(), dataUrl };
@@ -749,6 +1118,13 @@ function setMuted(next) {
   state.muted = next;
   elements.muteBtn.setAttribute("aria-pressed", String(next));
   elements.muteBtn.querySelector("span").textContent = next ? "Muted" : "Mute";
+  savePrefs();
+}
+
+function setJpegQuality(value) {
+  state.jpegQuality = clampQuality(value);
+  elements.qualityRange.value = String(state.jpegQuality);
+  elements.qualityValue.textContent = state.jpegQuality.toFixed(2);
   savePrefs();
 }
 
@@ -790,6 +1166,12 @@ function onKeydown(event) {
     savePrefs();
   } else if (key === "m") {
     setMuted(!state.muted);
+  } else if (key === "r") {
+    event.preventDefault();
+    toggleRecord();
+  } else if (key === "z") {
+    event.preventDefault();
+    setDrawingZone(!state.drawingZone);
   }
 }
 
@@ -809,6 +1191,14 @@ function refreshIcons() {
 
 async function bootstrap() {
   const prefs = loadPrefs();
+  if (Array.isArray(prefs.watchlist)) {
+    state.watchlist = new Set(prefs.watchlist.filter((name) => typeof name === "string" && name));
+  }
+  if (typeof prefs.quality === "number") {
+    state.jpegQuality = clampQuality(prefs.quality);
+    elements.qualityRange.value = String(state.jpegQuality);
+    elements.qualityValue.textContent = state.jpegQuality.toFixed(2);
+  }
   if (typeof prefs.muted === "boolean") {
     setMuted(prefs.muted);
   }
@@ -830,6 +1220,8 @@ async function bootstrap() {
   renderAlertLog();
   renderHistogram();
   drawSparkline();
+  updateRecordUi();
+  updateDropUi();
 
   try {
     const [health, config, classesPayload] = await Promise.all([
@@ -872,6 +1264,9 @@ function bindEvents() {
   elements.startCamera.addEventListener("click", start);
   elements.startCameraSide.addEventListener("click", start);
   elements.retryCamera.addEventListener("click", start);
+  elements.startReel.addEventListener("click", startReel);
+  elements.startReelSide.addEventListener("click", startReel);
+  elements.startReelError.addEventListener("click", startReel);
   elements.stopCamera.addEventListener("click", stopCamera);
   elements.facingBtn.addEventListener("click", () => {
     toggleFacing().catch((error) => {
@@ -879,8 +1274,34 @@ function bindEvents() {
     });
   });
   elements.snapshotBtn.addEventListener("click", captureSnapshot);
+  elements.recordBtn.addEventListener("click", toggleRecord);
+  elements.zoneBtn.addEventListener("click", () => setDrawingZone(!state.drawingZone));
+  elements.clearZoneBtn.addEventListener("click", clearZone);
+  elements.exportJsonBtn.addEventListener("click", () => exportRecording("json"));
+  elements.exportCsvBtn.addEventListener("click", () => exportRecording("csv"));
+  elements.clearRecordBtn.addEventListener("click", clearRecording);
   elements.helpBtn.addEventListener("click", toggleShortcuts);
   elements.muteBtn.addEventListener("click", () => setMuted(!state.muted));
+
+  elements.overlay.addEventListener("pointerdown", (event) => {
+    if (!state.drawingZone) {
+      return;
+    }
+    event.preventDefault();
+    elements.overlay.setPointerCapture(event.pointerId);
+    const point = overlayPoint(event);
+    state.zoneDraft = { x: point.x, y: point.y, width: 0, height: 0 };
+  });
+  elements.overlay.addEventListener("pointermove", (event) => {
+    if (!state.zoneDraft) {
+      return;
+    }
+    const point = overlayPoint(event);
+    state.zoneDraft.width = point.x - state.zoneDraft.x;
+    state.zoneDraft.height = point.y - state.zoneDraft.y;
+  });
+  elements.overlay.addEventListener("pointerup", commitZoneDraft);
+  elements.overlay.addEventListener("pointercancel", commitZoneDraft);
 
   elements.fpsRange.addEventListener("input", (event) => {
     state.targetFps = Number(event.target.value);
@@ -889,6 +1310,9 @@ function bindEvents() {
   elements.widthRange.addEventListener("input", (event) => {
     state.processingWidth = Number(event.target.value);
     elements.widthValue.textContent = `${state.processingWidth} px`;
+  });
+  elements.qualityRange.addEventListener("input", (event) => {
+    setJpegQuality(event.target.value);
   });
   elements.confidenceRange.addEventListener("input", (event) => {
     state.confidence = Number(event.target.value);

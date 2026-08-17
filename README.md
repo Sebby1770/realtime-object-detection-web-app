@@ -1,20 +1,23 @@
 # Real-Time Object Detection Web App
 
-v2 command-center for webcam object detection: FastAPI, WebSockets, OpenCV, and YOLOv8 when weights are present. Without Ultralytics or a `.pt` file the backend serves a deterministic mock detector so CI and CPU laptops still run.
+v2.1 command-center for webcam (or camera-free sample reel) object detection: FastAPI, WebSockets, OpenCV, and YOLOv8 when weights are present. Without Ultralytics or a `.pt` file the backend serves a deterministic mock detector so CI and CPU laptops still run.
 
 ## Features
 
 - Browser capture via `getUserMedia`, JPEG frames over a persistent WebSocket.
+- **Sample reel** — no camera: synthetic moving rectangles encoded as JPEG and sent over the same socket. Overlay, histogram, watchlist, and sparkline still run. HUD shows `REEL`.
 - YOLOv8 inference when `ultralytics` and local weights are available; otherwise `MockDetector` (person / cup / laptop).
-- Live confidence, image size, class filter, and watchlist per connection — no process restart.
+- Live confidence, JPEG quality, image size, class filter, and watchlist per connection — no process restart.
+- **ROI / draw zone** — click-drag a rectangle; detections whose box center is outside are dimmed and skipped for counts, histogram, and watchlist alerts (`in zone / total`).
+- **Session export** — record compact events in the tab (cap 2000), download JSON or CSV. Nothing is persisted on the server.
 - Detection JSON keeps `box: {x, y, width, height}` and adds `frame_id`, `latency_ms`, `inference_ms`, `counts`, and `alerts`.
-- Dense console UI: connection + model + mock badges, overlay HUD, class chips, session histogram, latency sparkline, snapshot strip.
-- Keyboard: <kbd>Space</kbd> start/stop, <kbd>S</kbd> snapshot, <kbd>L</kbd> labels, <kbd>M</kbd> mute, <kbd>?</kbd> shortcuts.
-- Frames are processed in memory only. Snapshots live in `localStorage` on the client.
+- Dense console UI: connection + model + mock badges, overlay HUD, class chips, session histogram, latency sparkline, busy/dropped counters, snapshot strip.
+- Keyboard: <kbd>Space</kbd> start/stop, <kbd>S</kbd> snapshot, <kbd>L</kbd> labels, <kbd>M</kbd> mute, <kbd>R</kbd> record, <kbd>Z</kbd> draw zone, <kbd>?</kbd> shortcuts.
+- Frames are processed in memory only. Snapshots and recordings stay in the browser.
 
 ## Privacy
 
-Webcam frames are **not stored on the server**. They are decoded, inferred, and discarded. Snapshots are captured in the browser (video + overlay → PNG) and the last ~12 data URLs stay in `localStorage`. There is no `POST /api/snapshot` upload path on purpose.
+Webcam frames are **not stored on the server**. They are decoded, inferred, and discarded. Snapshots are captured in the browser (video + overlay → PNG) and the last ~12 data URLs stay in `localStorage`. Session recordings stay in the tab until you export or clear them. There is no `POST /api/snapshot` upload path on purpose.
 
 ## Stack
 
@@ -76,10 +79,12 @@ If `YOLO_MOCK` is unset, the app still uses the mock path when Ultralytics is no
 
 | Key | Action |
 | --- | --- |
-| Space | Start / stop camera |
-| S | Snapshot (video + boxes, PNG) |
+| Space | Start camera, or stop the live camera / sample reel |
+| S | Snapshot (video or reel + boxes, PNG) |
 | L | Toggle labels |
 | M | Mute alert beep |
+| R | Start / stop session recording |
+| Z | Toggle draw zone (click-drag on the overlay) |
 | ? | Shortcuts overlay |
 
 Watchlist hits flash the stage and beep unless muted or `prefers-reduced-motion` is set.

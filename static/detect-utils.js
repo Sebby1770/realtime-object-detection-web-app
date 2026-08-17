@@ -32,5 +32,61 @@
     return entries.map(([label, count]) => `${label} ×${count}`).join(" · ");
   }
 
-  root.DetectUtils = { PALETTE, colorForLabel, formatCounts };
+  function boxCenter(box) {
+    const x = Number(box?.x) || 0;
+    const y = Number(box?.y) || 0;
+    const width = Number(box?.width) || 0;
+    const height = Number(box?.height) || 0;
+    return { x: x + width / 2, y: y + height / 2 };
+  }
+
+  function pointInRect(point, rect) {
+    if (!point || !rect) {
+      return false;
+    }
+    const x = Number(point.x);
+    const y = Number(point.y);
+    const left = Number(rect.x) || 0;
+    const top = Number(rect.y) || 0;
+    const width = Number(rect.width) || 0;
+    const height = Number(rect.height) || 0;
+    const right = left + width;
+    const bottom = top + height;
+    const minX = Math.min(left, right);
+    const maxX = Math.max(left, right);
+    const minY = Math.min(top, bottom);
+    const maxY = Math.max(top, bottom);
+    return x >= minX && x <= maxX && y >= minY && y <= maxY;
+  }
+
+  function eventsToCsv(events) {
+    const lines = ["timestamp,frame_id,label,confidence,x,y,w,h"];
+    for (const event of events || []) {
+      for (const detection of event.detections || []) {
+        const box = detection.box || {};
+        lines.push(
+          [
+            event.t,
+            event.frame_id,
+            detection.label,
+            detection.confidence,
+            box.x,
+            box.y,
+            box.width,
+            box.height,
+          ].join(","),
+        );
+      }
+    }
+    return `${lines.join("\n")}\n`;
+  }
+
+  root.DetectUtils = {
+    PALETTE,
+    colorForLabel,
+    formatCounts,
+    boxCenter,
+    pointInRect,
+    eventsToCsv,
+  };
 })(typeof window !== "undefined" ? window : globalThis);

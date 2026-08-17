@@ -290,6 +290,11 @@ h1 {
   pointer-events: none;
 }
 
+#overlay.interactive {
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
 .stage-hud {
   position: absolute;
   left: 0.65rem;
@@ -309,6 +314,11 @@ h1 {
   font-family: var(--mono);
   font-size: 0.68rem;
   font-weight: 700;
+}
+
+.stage-hud .hud-reel {
+  border-color: rgba(245, 200, 75, 0.45);
+  color: var(--yellow);
 }
 
 .stage-message {
@@ -334,6 +344,12 @@ h1 {
   color: var(--muted);
   font-size: 0.92rem;
   line-height: 1.45;
+}
+
+.stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
 }
 
 .stage-toolbar {
@@ -369,6 +385,23 @@ h1 {
 
 .ghost-button:hover:not(:disabled) {
   border-color: var(--muted);
+}
+
+.ghost-button[aria-pressed="true"] {
+  border-color: rgba(56, 214, 198, 0.55);
+  color: var(--teal);
+}
+
+#recordBtn[aria-pressed="true"] {
+  border-color: rgba(255, 111, 89, 0.55);
+  color: var(--coral);
+}
+
+.session-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.55rem;
 }
 
 .rail {
@@ -678,6 +711,10 @@ output {
   border-radius: 6px;
   padding: 0.45rem 0.5rem;
   background: #101014;
+}
+
+#detectionList li.dim {
+  opacity: 0.4;
 }
 
 .swatch {
