@@ -1,0 +1,10 @@
+services:
+  detect:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      YOLO_MOCK: "1"
+      YOLO_CONFIDENCE: "0.35"
+      YOLO_IMAGE_SIZE: "640"
+    restart: unless-stopped
