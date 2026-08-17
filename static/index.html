@@ -3,102 +3,235 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Real-Time Object Detection</title>
+    <meta name="theme-color" content="#09090b" />
+    <title>Detection Console · v2</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <script defer src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+    <script defer src="/static/detect-utils.js"></script>
     <script defer src="/static/app.js"></script>
   </head>
-  <body>
-    <main class="app-shell">
+  <body class="detection-console">
+    <a class="skip-link" href="#videoStage">Skip to stage</a>
+    <div class="app-shell">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">YOLOv8 webcam stream</p>
-          <h1>Object Detection Live</h1>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow">Realtime command center</p>
+            <h1>Object Detection</h1>
+          </div>
+          <span class="version-chip">v2.0</span>
         </div>
-        <div class="status-pill" id="connectionStatus">
-          <span class="status-dot"></span>
-          <span>Offline</span>
+        <div class="topbar-meta">
+          <div class="status-pill" id="connectionStatus">
+            <span class="status-dot"></span>
+            <span>Offline</span>
+          </div>
+          <div class="meta-pill" id="modelBadge" title="Active detector">model —</div>
+          <div class="meta-pill mock hidden" id="mockBadge">MOCK</div>
+          <button class="icon-button" id="muteBtn" type="button" aria-pressed="false" title="Mute alerts (M)">
+            <i data-lucide="volume-2"></i>
+            <span>Mute</span>
+          </button>
+          <button class="icon-button" id="helpBtn" type="button" title="Keyboard shortcuts (?)">
+            <i data-lucide="keyboard"></i>
+            <span>?</span>
+          </button>
         </div>
       </header>
 
       <section class="workspace">
-        <div class="stage-panel">
-          <div class="video-stage" id="videoStage">
-            <video id="video" autoplay playsinline muted></video>
-            <canvas id="overlay"></canvas>
-            <div class="empty-state" id="emptyState">
-              <button class="primary-button" id="startCamera">
-                <i data-lucide="video"></i>
-                <span>Start camera</span>
-              </button>
+        <div class="stage-column">
+          <div class="stage-panel">
+            <div class="video-stage" id="videoStage">
+              <video id="video" autoplay playsinline muted></video>
+              <canvas id="overlay"></canvas>
+              <div class="stage-hud" id="stageHud" hidden>
+                <span id="hudObjects">0 obj</span>
+                <span id="hudLatency">-- ms</span>
+                <span id="hudFps">-- fps</span>
+              </div>
+              <div class="stage-message" id="emptyState">
+                <p class="eyebrow">Camera idle</p>
+                <h2>Start a private live stream</h2>
+                <p>
+                  JPEG frames stay in memory on this machine. Nothing is written to disk
+                  or uploaded to object storage.
+                </p>
+                <button class="primary-button" id="startCamera" type="button">
+                  <i data-lucide="video"></i>
+                  <span>Start camera</span>
+                </button>
+              </div>
+              <div class="stage-message hidden" id="errorState">
+                <p class="eyebrow danger" id="errorEyebrow">Camera error</p>
+                <h2 id="errorTitle">Could not open the camera</h2>
+                <p id="errorBody">Check permissions and try again.</p>
+                <button class="primary-button" id="retryCamera" type="button">
+                  <i data-lucide="refresh-cw"></i>
+                  <span>Try again</span>
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-
-        <aside class="control-panel">
-          <div class="button-row">
-            <button class="primary-button" id="startCameraSide">
+          <div class="stage-toolbar">
+            <button class="primary-button" id="startCameraSide" type="button">
               <i data-lucide="play"></i>
               <span>Start</span>
             </button>
-            <button class="ghost-button" id="stopCamera" disabled>
+            <button class="ghost-button" id="stopCamera" type="button" disabled>
               <i data-lucide="square"></i>
               <span>Stop</span>
             </button>
+            <button class="ghost-button" id="facingBtn" type="button" hidden>
+              <i data-lucide="switch-camera"></i>
+              <span id="facingLabel">Rear</span>
+            </button>
+            <button class="ghost-button" id="snapshotBtn" type="button" disabled>
+              <i data-lucide="camera"></i>
+              <span>Snapshot</span>
+            </button>
           </div>
+        </div>
 
-          <div class="control-group">
-            <label for="fpsRange">Frame rate</label>
-            <div class="range-row">
-              <input id="fpsRange" type="range" min="1" max="12" value="6" />
-              <output id="fpsValue">6 fps</output>
+        <aside class="rail">
+          <section class="rail-card">
+            <header>
+              <h2>Inference</h2>
+              <span class="hint">live over WebSocket</span>
+            </header>
+            <div class="control-group">
+              <label for="confidenceRange">Confidence</label>
+              <div class="range-row">
+                <input id="confidenceRange" type="range" min="0.05" max="0.95" step="0.05" value="0.35" />
+                <output id="confidenceValue">0.35</output>
+              </div>
             </div>
-          </div>
+            <div class="control-group">
+              <label for="fpsRange">Frame rate</label>
+              <div class="range-row">
+                <input id="fpsRange" type="range" min="1" max="12" value="6" />
+                <output id="fpsValue">6 fps</output>
+              </div>
+            </div>
+            <div class="control-group">
+              <label for="widthRange">Processing width</label>
+              <div class="range-row">
+                <input id="widthRange" type="range" min="320" max="960" step="80" value="640" />
+                <output id="widthValue">640 px</output>
+              </div>
+            </div>
+            <div class="control-group">
+              <label for="imgszSelect">Model image size</label>
+              <select id="imgszSelect">
+                <option value="320">320</option>
+                <option value="640" selected>640</option>
+                <option value="800">800</option>
+              </select>
+            </div>
+            <label class="toggle-row" for="labelToggle">
+              <input id="labelToggle" type="checkbox" checked />
+              <span>Show labels <kbd>L</kbd></span>
+            </label>
+          </section>
 
-          <div class="control-group">
-            <label for="widthRange">Processing width</label>
-            <div class="range-row">
-              <input id="widthRange" type="range" min="320" max="960" step="80" value="640" />
-              <output id="widthValue">640 px</output>
-            </div>
-          </div>
+          <section class="rail-card">
+            <header>
+              <h2>Class filter</h2>
+              <button class="text-button" id="clearFilters" type="button">All</button>
+            </header>
+            <input id="classSearch" type="search" placeholder="Filter class list…" autocomplete="off" />
+            <div class="chip-cloud" id="classCloud"></div>
+          </section>
 
-          <label class="toggle-row" for="labelToggle">
-            <input id="labelToggle" type="checkbox" checked />
-            <span>Show labels</span>
-          </label>
+          <section class="rail-card">
+            <header>
+              <h2>Watchlist</h2>
+              <span class="hint">alerts + flash</span>
+            </header>
+            <div class="chip-cloud compact" id="watchCloud"></div>
+            <ul class="alert-log" id="alertLog"></ul>
+          </section>
 
-          <div class="stats-grid">
-            <div class="stat">
-              <span>Objects</span>
-              <strong id="objectCount">0</strong>
+          <section class="rail-card">
+            <header>
+              <h2>Telemetry</h2>
+            </header>
+            <div class="stats-grid">
+              <div class="stat">
+                <span>Objects</span>
+                <strong id="objectCount">0</strong>
+              </div>
+              <div class="stat">
+                <span>Latency</span>
+                <strong id="latency">--</strong>
+              </div>
+              <div class="stat">
+                <span>Stream</span>
+                <strong id="streamFps">--</strong>
+              </div>
+              <div class="stat">
+                <span>Infer</span>
+                <strong id="inferMs">--</strong>
+              </div>
             </div>
-            <div class="stat">
-              <span>Latency</span>
-              <strong id="latency">--</strong>
+            <div class="spark-wrap">
+              <div class="spark-head">
+                <span>Latency sparkline</span>
+                <span id="sparkHint">last 40</span>
+              </div>
+              <canvas id="sparkline" width="320" height="56" aria-label="Latency sparkline"></canvas>
             </div>
-            <div class="stat">
-              <span>Stream</span>
-              <strong id="streamFps">--</strong>
+            <div class="histogram">
+              <div class="spark-head">
+                <span>Session histogram</span>
+                <span id="histTotal">0</span>
+              </div>
+              <ul id="histogramList"></ul>
             </div>
-            <div class="stat">
-              <span>Model</span>
-              <strong>YOLOv8n</strong>
-            </div>
-          </div>
+          </section>
 
-          <div class="detections">
-            <div class="detections-head">
+          <section class="rail-card">
+            <header>
+              <h2>Snapshots</h2>
+              <span class="hint">local only</span>
+            </header>
+            <p class="privacy-note">
+              Captures stay in this browser (last 12). The server never stores webcam frames.
+            </p>
+            <div class="snapshot-strip" id="snapshotStrip"></div>
+          </section>
+
+          <section class="rail-card detections">
+            <header class="detections-head">
               <h2>Detections</h2>
               <span id="lastUpdated">Idle</span>
-            </div>
+            </header>
+            <p class="counts-line" id="countsLine">none</p>
             <ul id="detectionList"></ul>
-          </div>
+          </section>
         </aside>
       </section>
+    </div>
 
-      <canvas id="captureCanvas" aria-hidden="true"></canvas>
-    </main>
+    <dialog class="shortcuts" id="shortcutsModal">
+      <form method="dialog">
+        <header>
+          <h2>Keyboard shortcuts</h2>
+          <button class="icon-button" value="close" type="submit" aria-label="Close">
+            <i data-lucide="x"></i>
+          </button>
+        </header>
+        <dl>
+          <div><dt><kbd>Space</kbd></dt><dd>Start or stop the camera</dd></div>
+          <div><dt><kbd>S</kbd></dt><dd>Snapshot of video + boxes</dd></div>
+          <div><dt><kbd>L</kbd></dt><dd>Toggle labels</dd></div>
+          <div><dt><kbd>M</kbd></dt><dd>Mute or unmute alerts</dd></div>
+          <div><dt><kbd>?</kbd></dt><dd>Show this overlay</dd></div>
+        </dl>
+      </form>
+    </dialog>
+
+    <canvas id="captureCanvas" aria-hidden="true"></canvas>
   </body>
 </html>
-
