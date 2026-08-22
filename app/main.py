@@ -5,15 +5,17 @@ import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.detector import detect_objects, model_info
+from app.detector import clamp_confidence, detect_objects, model_info
 from app.stats import SessionStats
 from app.tracker import SimpleTracker
 
 
+APP_VERSION = "2.0.0"
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 DEFAULT_ALLOWED_ORIGINS = {
@@ -21,29 +23,66 @@ DEFAULT_ALLOWED_ORIGINS = {
     "http://127.0.0.1:8000",
 }
 MAX_FRAME_BYTES = int(os.getenv("MAX_FRAME_BYTES", str(512 * 1024)))
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))
 MIN_FRAME_INTERVAL_SECONDS = float(os.getenv("MIN_FRAME_INTERVAL_SECONDS", "0.08"))
 MAX_WS_CONNECTIONS = int(os.getenv("MAX_WS_CONNECTIONS", "4"))
 ACTIVE_CONNECTIONS = 0
 
 app = FastAPI(
     title="Real-Time Object Detection",
-    description="FastAPI, WebSockets, OpenCV, and YOLOv8 live object detection.",
-    version="1.6.0",
+    description="Dual-runtime live object detection: FastAPI + YOLOv8 locally, TensorFlow.js coco-ssd in the browser.",
+    version=APP_VERSION,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(
+        origin.strip().rstrip("/")
+        for origin in os.getenv("WS_ALLOWED_ORIGINS", "").split(",")
+        if origin.strip()
+    )
+    or sorted(DEFAULT_ALLOWED_ORIGINS),
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
 )
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+def allowed_origins() -> set[str]:
+    configured = os.getenv("WS_ALLOWED_ORIGINS", "")
+    if not configured:
+        return DEFAULT_ALLOWED_ORIGINS
+    return {origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()}
+
+
+def is_allowed_origin(websocket: WebSocket) -> bool:
+    origin = websocket.headers.get("origin")
+    if not origin:
+        return False
+    return origin.rstrip("/") in allowed_origins()
+
+
+def validate_image_upload(upload: UploadFile, data: bytes) -> None:
+    content_type = (upload.content_type or "").split(";")[0].strip().lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image uploads are accepted.")
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty image upload.")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="Image exceeds the 8MB limit.")
+
+
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(BASE_DIR / "index.html")
 
 
 @app.get("/health")
 async def health() -> dict[str, str | int]:
     return {
         "status": "ok",
-        "version": "1.6.0",
+        "version": APP_VERSION,
         "active_connections": ACTIVE_CONNECTIONS,
         "max_connections": MAX_WS_CONNECTIONS,
     }
@@ -60,9 +99,8 @@ async def detect_upload(
     confidence: float | None = None,
 ) -> dict[str, object]:
     frame_bytes = await image.read()
-    if not frame_bytes:
-        return {"type": "error", "message": "Empty image upload."}
-    payload = await detect_objects(frame_bytes, confidence=confidence)
+    validate_image_upload(image, frame_bytes)
+    payload = await detect_objects(frame_bytes, confidence=clamp_confidence(confidence))
     return payload
 
 
@@ -71,14 +109,20 @@ async def detect_batch(
     images: list[UploadFile] = File(...),
     confidence: float | None = None,
 ) -> dict[str, object]:
+    if not images:
+        raise HTTPException(status_code=400, detail="Empty image upload.")
     results: list[dict[str, object]] = []
+    threshold = clamp_confidence(confidence)
     for upload in images[:12]:
         frame_bytes = await upload.read()
         if not frame_bytes:
-            continue
-        payload = await detect_objects(frame_bytes, confidence=confidence)
+            raise HTTPException(status_code=400, detail="Empty image upload.")
+        validate_image_upload(upload, frame_bytes)
+        payload = await detect_objects(frame_bytes, confidence=threshold)
         payload["filename"] = upload.filename
         results.append(payload)
+    if not results:
+        raise HTTPException(status_code=400, detail="Empty image upload.")
     return {"count": len(results), "results": results}
 
 
@@ -90,18 +134,12 @@ async def session_stats() -> dict[str, str | int | float | list[str]]:
 _SESSION_STATS = SessionStats()
 
 
-def allowed_origins() -> set[str]:
-    configured = os.getenv("WS_ALLOWED_ORIGINS", "")
-    if not configured:
-        return DEFAULT_ALLOWED_ORIGINS
-    return {origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()}
-
-
-def is_allowed_origin(websocket: WebSocket) -> bool:
-    origin = websocket.headers.get("origin")
-    if not origin:
-        return False
-    return origin.rstrip("/") in allowed_origins()
+def _sync_global_stats(session_stats: SessionStats) -> None:
+    _SESSION_STATS.frames_processed = session_stats.frames_processed
+    _SESSION_STATS.detections_total = session_stats.detections_total
+    _SESSION_STATS.classes_seen = set(session_stats.classes_seen)
+    _SESSION_STATS.latency_samples = list(session_stats.latency_samples)
+    _SESSION_STATS.roi_alerts = session_stats.roi_alerts
 
 
 @app.websocket("/ws/detect")
@@ -138,12 +176,33 @@ async def detect_socket(websocket: WebSocket) -> None:
                     payload = json.loads(message["text"])
                 except json.JSONDecodeError:
                     continue
-                if payload.get("type") == "config":
+                message_type = payload.get("type")
+                if message_type == "config":
                     if "confidence" in payload:
-                        confidence_threshold = float(payload["confidence"])
+                        try:
+                            confidence_threshold = clamp_confidence(payload["confidence"])
+                        except (TypeError, ValueError):
+                            pass
                     if "classes" in payload:
                         class_filter = [str(value) for value in payload["classes"]]
-                    await websocket.send_json({"type": "config_ack", "ok": True})
+                    await websocket.send_json(
+                        {
+                            "type": "config_ack",
+                            "ok": True,
+                            "confidence": confidence_threshold,
+                            "classes": class_filter,
+                        }
+                    )
+                elif message_type == "roi_alert":
+                    session_stats.record_roi_alert()
+                    _sync_global_stats(session_stats)
+                    await websocket.send_json(
+                        {
+                            "type": "roi_alert_ack",
+                            "ok": True,
+                            "roi_alerts": session_stats.roi_alerts,
+                        }
+                    )
                 continue
 
             frame = message.get("bytes")
@@ -193,10 +252,7 @@ async def detect_socket(websocket: WebSocket) -> None:
                     payload.get("detections", []),
                     payload["latency_ms"],
                 )
-                _SESSION_STATS.frames_processed = session_stats.frames_processed
-                _SESSION_STATS.detections_total = session_stats.detections_total
-                _SESSION_STATS.classes_seen = set(session_stats.classes_seen)
-                _SESSION_STATS.latency_samples = list(session_stats.latency_samples)
+                _sync_global_stats(session_stats)
                 payload["session"] = session_stats.as_dict()
                 await websocket.send_json(payload)
                 processing = False

@@ -5,19 +5,26 @@ import os
 from functools import lru_cache
 from typing import Any
 
-import cv2
-import numpy as np
-
 
 MODEL_NAME = os.getenv("YOLO_MODEL", "yolov8n.pt")
 MODEL_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", "0.35"))
 MODEL_IMAGE_SIZE = int(os.getenv("YOLO_IMAGE_SIZE", "640"))
+MIN_CONFIDENCE = 0.05
+MAX_CONFIDENCE = 0.95
 
 
-def decode_jpeg(frame_bytes: bytes) -> np.ndarray:
+def clamp_confidence(confidence: float | None) -> float:
+    value = MODEL_CONFIDENCE if confidence is None else float(confidence)
+    return max(MIN_CONFIDENCE, min(MAX_CONFIDENCE, value))
+
+
+def decode_jpeg(frame_bytes: bytes) -> Any:
     """Decode a browser-sent JPEG frame into an OpenCV BGR image."""
     if not frame_bytes:
         raise ValueError("Empty frame received")
+
+    import cv2
+    import numpy as np
 
     frame_array = np.frombuffer(frame_bytes, dtype=np.uint8)
     frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
@@ -46,14 +53,16 @@ def _class_name(names: Any, class_id: int) -> str:
 
 
 def run_detection(
-    frame: np.ndarray,
+    frame: Any,
     *,
     confidence: float | None = None,
     class_filter: list[str] | None = None,
     tracker: Any | None = None,
 ) -> dict[str, Any]:
+    import numpy as np
+
     model = load_model()
-    threshold = MODEL_CONFIDENCE if confidence is None else float(confidence)
+    threshold = clamp_confidence(confidence)
     results = model.predict(
         frame,
         conf=threshold,
@@ -141,4 +150,3 @@ async def detect_objects(
         class_filter=class_filter,
         tracker=tracker,
     )
-

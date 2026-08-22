@@ -18,9 +18,16 @@ def _iou(left: dict[str, float], right: dict[str, float]) -> float:
 
 
 class SimpleTracker:
-    def __init__(self, *, iou_threshold: float = 0.35, trail_length: int = 12) -> None:
+    def __init__(
+        self,
+        *,
+        iou_threshold: float = 0.35,
+        trail_length: int = 12,
+        ttl_frames: int = 8,
+    ) -> None:
         self.iou_threshold = iou_threshold
         self.trail_length = trail_length
+        self.ttl_frames = ttl_frames
         self._next_id = 1
         self._tracks: dict[int, dict[str, Any]] = {}
 
@@ -59,6 +66,7 @@ class SimpleTracker:
                 "label": detection["label"],
                 "box": box,
                 "trail": trail,
+                "missed": 0,
             }
             enriched = dict(detection)
             enriched["track_id"] = track_id
@@ -68,7 +76,13 @@ class SimpleTracker:
             ]
             assigned.append(enriched)
 
-        stale = [track_id for track_id in self._tracks if track_id not in used_tracks]
+        stale = []
+        for track_id, track in self._tracks.items():
+            if track_id in used_tracks:
+                continue
+            track["missed"] = int(track.get("missed", 0)) + 1
+            if track["missed"] >= self.ttl_frames:
+                stale.append(track_id)
         for track_id in stale:
             self._tracks.pop(track_id, None)
         return assigned

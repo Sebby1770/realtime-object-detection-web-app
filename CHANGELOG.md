@@ -1,5 +1,35 @@
 # Changelog
 
+## 2.0.0 — 2026-08-22
+
+### Added
+- Dual inference runtime: local FastAPI + YOLOv8 WebSocket, or in-browser TensorFlow.js coco-ssd
+- GitHub Pages deploy that publishes `index.html`, `favicon.svg`, and `static/` so the hosted site is a working detector
+- Shared detection JSON across runtimes (boxes, tracks, trails, session stats)
+- JS `SimpleTracker` with unmatched-track TTL (~8 frames); Python tracker matches
+- Collapsible control groups, searchable class chips, video-first console layout
+- MIT LICENSE, CI pytest workflow, GitHub Pages workflow
+- REST upload limits: reject empty, non-image, and >8MB bodies
+- Edge-triggered ROI alerts (enter + 1.2s cooldown) and `record_roi_alert` on the server session
+- Visible **Demo feed** badge and 8s camera timeout
+- Single `AudioContext` with master gain (`static/audio.js`)
+
+### Changed
+- Application version **2.0.0**
+- `index.html` moved to the repo root with relative `static/` URLs
+- Overlay heatmap stacks under the box canvas; overlay pointer events only while drawing ROI
+- Confidence clamped to `[0.05, 0.95]` on WS config and REST
+- `object-fit: contain` + letterbox box mapping
+- Light theme tokens cover the page background, charts, and radar
+- Privacy copy distinguishes overlay-only server cloak vs on-device browser mode
+- WS client ignores non-`detections` messages (`config_ack` no longer clears boxes)
+
+### Fixed
+- ROI drawing (pointer-events / z-index)
+- Per-frame ROI alert spam
+- New `AudioContext` on every beep
+- Silent 2.5s camera timeout falling back to demo
+
 ## 1.6.0 — 2026-07-07
 
 ### Added
