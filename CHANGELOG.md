@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.0 — 2026-08-22
+
+### Added
+- Photorealistic **sample scenes** (desk, kitchen, street) so GitHub Pages detects real COCO objects without a camera
+- Model-loading overlay while TensorFlow.js / coco-ssd downloads
+- Class presets: All, People, Vehicles, Kitchen
+- Fullscreen stage (`F`) and an explicit synthetic demo button
+- Camera failure now loads the desk sample instead of a geometric feed coco-ssd cannot see
+
+### Changed
+- Application version **2.1.0**
+
 ## 2.0.0 — 2026-08-22
 
 ### Added

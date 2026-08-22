@@ -276,11 +276,39 @@ h1 {
   inset: 0;
   z-index: 4;
   display: grid;
-  place-items: center;
+  justify-items: center;
+  align-content: center;
   gap: 1rem;
   padding: 1.5rem;
   background: color-mix(in srgb, var(--stage-bg) 55%, transparent);
   backdrop-filter: blur(8px);
+}
+
+.sample-row,
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: center;
+}
+
+.model-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  gap: 0.4rem;
+  background: rgba(8, 8, 10, 0.62);
+  color: var(--text);
+  text-align: center;
+  font-weight: 700;
+}
+
+.model-overlay-status {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 500;
 }
 
 .empty-state.hidden {

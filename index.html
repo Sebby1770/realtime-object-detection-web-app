@@ -21,8 +21,8 @@
     <meta name="twitter:card" content="summary" />
     <title>Realtime Detection Console</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="static/styles.css?v=2.0.0" />
-    <script type="module" src="static/app.js?v=2.0.0"></script>
+    <link rel="stylesheet" href="static/styles.css?v=2.1.0" />
+    <script type="module" src="static/app.js?v=2.1.0"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -56,8 +56,8 @@
             </div>
             <div class="empty-state" id="emptyState">
               <div class="empty-copy">
-                <p class="empty-kicker">Camera or demo feed</p>
-                <p>Start a live stream. On GitHub Pages, inference stays in this tab.</p>
+                <p class="empty-kicker">Camera or sample scene</p>
+                <p>Start a live stream, or run coco-ssd on a still that actually contains objects. On GitHub Pages, inference stays in this tab.</p>
               </div>
               <button class="primary-button" id="startCamera" type="button">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
@@ -65,6 +65,15 @@
                 </svg>
                 <span>Start camera</span>
               </button>
+              <div class="sample-row" id="sampleRow">
+                <button type="button" class="ghost-button" data-sample="desk">Desk</button>
+                <button type="button" class="ghost-button" data-sample="kitchen">Kitchen</button>
+                <button type="button" class="ghost-button" data-sample="street">Street</button>
+              </div>
+            </div>
+            <div class="model-overlay hidden" id="modelOverlay">
+              <p>Loading on-device model</p>
+              <p class="model-overlay-status" id="modelOverlayStatus">TensorFlow.js…</p>
             </div>
           </div>
         </div>
@@ -115,6 +124,15 @@
               <input id="uploadDetect" type="file" accept="image/*" multiple />
               <p class="field-note" id="uploadDetectStatus">Show the image on the stage and run the active runtime.</p>
             </div>
+            <div class="button-row">
+              <button class="ghost-button" id="fullscreenButton" type="button">Fullscreen</button>
+              <button class="ghost-button" id="syntheticDemoButton" type="button">Synthetic demo</button>
+            </div>
+            <div class="sample-row">
+              <button type="button" class="ghost-button" data-sample="desk">Desk</button>
+              <button type="button" class="ghost-button" data-sample="kitchen">Kitchen</button>
+              <button type="button" class="ghost-button" data-sample="street">Street</button>
+            </div>
           </details>
 
           <details class="panel-group" open>
@@ -129,6 +147,12 @@
                 <input id="confidenceRange" type="range" min="0.05" max="0.95" step="0.05" value="0.35" />
                 <output id="confidenceValue">35%</output>
               </div>
+            </div>
+            <div class="preset-row" role="group" aria-label="Class presets">
+              <button type="button" class="ghost-button" data-preset="all">All</button>
+              <button type="button" class="ghost-button" data-preset="people">People</button>
+              <button type="button" class="ghost-button" data-preset="vehicles">Vehicles</button>
+              <button type="button" class="ghost-button" data-preset="kitchen">Kitchen</button>
             </div>
             <div class="control-group">
               <label for="classSearch">Classes</label>

@@ -1,6 +1,6 @@
 [project]
 name = "realtime-object-detection-web-app"
-version = "2.0.0"
+version = "2.1.0"
 description = "Dual-runtime realtime object detection: FastAPI + YOLOv8 or in-browser coco-ssd."
 readme = "README.md"
 license = { text = "MIT" }

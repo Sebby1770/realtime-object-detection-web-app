@@ -9,6 +9,8 @@ Both runtimes emit the same detection JSON, so overlay, heatmap, radar, ROI, son
 
 Live Pages demo: [https://Sebby1770.github.io/realtime-object-detection-web-app/](https://Sebby1770.github.io/realtime-object-detection-web-app/)
 
+On Pages, click **Desk**, **Kitchen**, or **Street** if you do not want to grant camera access. Those stills contain COCO objects the in-browser model can actually see. Geometric demo video is now an explicit **Synthetic demo** control for pipeline testing.
+
 ## Features
 
 - Auto runtime: `GET health` → YOLOv8 server; otherwise COCO-SSD in-browser. Manual toggle on the Model panel.

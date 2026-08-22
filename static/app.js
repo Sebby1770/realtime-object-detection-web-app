@@ -29,7 +29,7 @@ import {
   sonifyDetections,
 } from "./audio.js";
 
-const APP_VERSION = "2.0.0";
+const APP_VERSION = "2.1.0";
 const ROI_COOLDOWN_MS = 1200;
 const CAMERA_TIMEOUT_MS = 8000;
 const MAX_ROIS = 3;
@@ -109,6 +109,42 @@ const elements = {
   hudStats: document.querySelector("#hudStats"),
   hudState: document.querySelector("#hudState"),
   eyebrow: document.querySelector("#eyebrow"),
+  sampleRow: document.querySelector("#sampleRow"),
+  modelOverlay: document.querySelector("#modelOverlay"),
+  modelOverlayStatus: document.querySelector("#modelOverlayStatus"),
+  fullscreenButton: document.querySelector("#fullscreenButton"),
+  syntheticDemoButton: document.querySelector("#syntheticDemoButton"),
+};
+
+const SAMPLE_SCENES = {
+  desk: { src: "static/samples/desk.jpg", label: "Desk" },
+  kitchen: { src: "static/samples/kitchen.jpg", label: "Kitchen" },
+  street: { src: "static/samples/street.jpg", label: "Street" },
+};
+
+const CLASS_PRESETS = {
+  all: [],
+  people: ["person"],
+  vehicles: ["bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat"],
+  kitchen: [
+    "bottle",
+    "wine glass",
+    "cup",
+    "fork",
+    "knife",
+    "spoon",
+    "bowl",
+    "banana",
+    "apple",
+    "sandwich",
+    "orange",
+    "broccoli",
+    "carrot",
+    "hot dog",
+    "pizza",
+    "donut",
+    "cake",
+  ],
 };
 
 const state = {
@@ -568,9 +604,7 @@ async function setMode(nextMode, { user = false } = {}) {
     } else {
       setConnectionStatus("On-device", true);
       try {
-        await loadBrowserModel((message) => {
-          elements.lastUpdated.textContent = message;
-        });
+        await ensureBrowserModel();
         elements.lastUpdated.textContent = "COCO-SSD ready";
       } catch (error) {
         elements.lastUpdated.textContent = error.message || "Failed to load COCO-SSD";
@@ -583,6 +617,62 @@ async function setMode(nextMode, { user = false } = {}) {
   }
 }
 
+function setModelOverlay(visible, message = "") {
+  if (!elements.modelOverlay) return;
+  elements.modelOverlay.classList.toggle("hidden", !visible);
+  if (elements.modelOverlayStatus && message) {
+    elements.modelOverlayStatus.textContent = message;
+  }
+}
+
+async function ensureBrowserModel() {
+  if (state.mode !== "browser") {
+    return;
+  }
+  setModelOverlay(true, "Loading TensorFlow.js…");
+  try {
+    await loadBrowserModel((message) => {
+      elements.lastUpdated.textContent = message;
+      setModelOverlay(true, message);
+    });
+  } finally {
+    setModelOverlay(false);
+  }
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(`Could not load ${src}`));
+    image.src = src;
+  });
+}
+
+async function loadSampleScene(id) {
+  const scene = SAMPLE_SCENES[id];
+  if (!scene) {
+    return;
+  }
+  await resumeAudio();
+  if (state.stream) {
+    state.stream.getTracks().forEach((track) => track.stop());
+    state.stream = null;
+  }
+  state.running = false;
+  try {
+    const image = await loadImage(scene.src);
+    showStillImage(image);
+    elements.hudState.textContent = scene.label;
+    elements.lastUpdated.textContent = `${scene.label} sample loaded`;
+    await ensureBrowserModel();
+    await rerunStillDetection();
+    elements.uploadDetectStatus.textContent = `${scene.label} scene: ${state.detections.length} object(s).`;
+  } catch (error) {
+    elements.lastUpdated.textContent = error.message || "Sample scene failed.";
+  }
+}
+
 async function startCamera() {
   if (state.running) {
     return;
@@ -591,12 +681,15 @@ async function startCamera() {
   clearStageMedia();
 
   const camera = await requestCameraStream();
-  state.stream = camera.stream || createDemoStream();
-  if (camera.stream) {
-    elements.video.srcObject = state.stream;
-    await elements.video.play().catch(() => {});
-    setDemoBadge(false);
+  if (!camera.stream) {
+    elements.lastUpdated.textContent = `${camera.reason || "Camera unavailable"}. Loading desk sample.`;
+    await loadSampleScene("desk");
+    return;
   }
+  state.stream = camera.stream;
+  elements.video.srcObject = state.stream;
+  await elements.video.play().catch(() => {});
+  setDemoBadge(false);
 
   const source = currentSource();
   const size = sourceSize(source);
@@ -624,9 +717,7 @@ async function startCamera() {
   } else {
     setConnectionStatus("On-device", true);
     try {
-      await loadBrowserModel((message) => {
-        elements.lastUpdated.textContent = message;
-      });
+      await ensureBrowserModel();
       elements.lastUpdated.textContent = state.demoMode ? "Demo stream active" : "COCO-SSD ready";
     } catch (error) {
       elements.lastUpdated.textContent = error.message || "Failed to load COCO-SSD";
@@ -836,7 +927,7 @@ async function detectUploadedImages(fileList) {
   if (state.mode === "browser") {
     elements.uploadDetectStatus.textContent = files.length === 1 ? "Detecting on-device…" : `Detecting ${files.length} images on-device…`;
     try {
-      await loadBrowserModel();
+      await ensureBrowserModel();
       let total = 0;
       let firstPayload = null;
       for (const file of files) {
@@ -967,6 +1058,50 @@ function renderClassChipPicker() {
     return button;
   });
   elements.classChipList.replaceChildren(...chips);
+}
+
+function applyClassPreset(name) {
+  const classes = CLASS_PRESETS[name];
+  if (!classes) {
+    return;
+  }
+  state.selectedClasses = [...classes];
+  sendDetectionConfig();
+  saveSettings();
+  renderClassChipPicker();
+  if (state.stillMode) {
+    state.stillDirty = true;
+    rerunStillDetection();
+  }
+}
+
+async function toggleFullscreen() {
+  const stage = elements.videoStage;
+  if (!document.fullscreenElement) {
+    await stage.requestFullscreen?.();
+  } else {
+    await document.exitFullscreen?.();
+  }
+}
+
+function startSyntheticDemo() {
+  clearStageMedia();
+  const stream = createDemoStream();
+  state.stream = stream;
+  state.running = true;
+  elements.emptyState.classList.add("hidden");
+  elements.startCameraSide.disabled = true;
+  elements.stopCamera.disabled = false;
+  elements.snapshotButton.disabled = false;
+  elements.clearHistoryButton.disabled = false;
+  elements.exportHistoryButton.disabled = false;
+  elements.roiDrawButton.disabled = false;
+  elements.roiClearButton.disabled = false;
+  elements.pauseButton.disabled = false;
+  if (state.mode === "server") {
+    ensureServerRuntime().connect();
+  }
+  captureLoop();
 }
 
 function escapeHtml(value) {
@@ -1311,6 +1446,17 @@ function isTypingTarget(target) {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable;
 }
 
+document.querySelectorAll("[data-sample]").forEach((button) => {
+  button.addEventListener("click", () => loadSampleScene(button.dataset.sample));
+});
+document.querySelectorAll("[data-preset]").forEach((button) => {
+  button.addEventListener("click", () => applyClassPreset(button.dataset.preset));
+});
+elements.fullscreenButton?.addEventListener("click", () => {
+  toggleFullscreen().catch(() => {});
+});
+elements.syntheticDemoButton?.addEventListener("click", startSyntheticDemo);
+
 elements.startCamera.addEventListener("click", () => {
   startCamera().catch((error) => {
     elements.lastUpdated.textContent = error.message;
@@ -1486,6 +1632,9 @@ window.addEventListener("keydown", (event) => {
     elements.roiStatus.textContent = state.rois.length
       ? `${state.rois.length} zone(s) armed.`
       : "No ROI zones set (max 3).";
+  } else if (event.key === "f" || event.key === "F") {
+    event.preventDefault();
+    toggleFullscreen().catch(() => {});
   }
 });
 
