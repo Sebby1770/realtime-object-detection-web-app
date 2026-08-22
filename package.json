@@ -1,0 +1,9 @@
+{
+  "name": "realtime-object-detection-web-app",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:js": "node --check static/app.js && node --check static/tracker.js && node --check static/runtime-browser.js && node --check static/runtime-server.js && node --check static/overlay.js && node --check static/audio.js && node --test tests/tracker.test.js"
+  }
+}

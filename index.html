@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Dual-runtime realtime object detection: local YOLOv8 or on-device COCO-SSD. Frames can stay in the tab."
+    />
+    <meta name="theme-color" content="#0b0b0d" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Realtime Detection Console" />
+    <meta
+      property="og:description"
+      content="Live object detection in the browser. On GitHub Pages, coco-ssd runs on-device and frames never leave the tab."
+    />
+    <meta
+      property="og:url"
+      content="https://Sebby1770.github.io/realtime-object-detection-web-app/"
+    />
+    <meta name="twitter:card" content="summary" />
+    <title>Realtime Detection Console</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="static/styles.css?v=2.0.0" />
+    <script type="module" src="static/app.js?v=2.0.0"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow" id="eyebrow">On-device vision console</p>
+            <h1>Realtime Detection</h1>
+          </div>
+        </div>
+        <div class="topbar-meta">
+          <span class="hud-chip" id="modeChip">COCO-SSD · in-browser</span>
+          <div class="status-pill" id="connectionStatus">
+            <span class="status-dot"></span>
+            <span data-status-label>Offline</span>
+          </div>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <div class="stage-panel">
+          <div class="video-stage" id="videoStage">
+            <video id="video" autoplay playsinline muted></video>
+            <canvas id="heatmap"></canvas>
+            <canvas id="overlay"></canvas>
+            <div class="stage-hud" aria-hidden="true">
+              <span class="hud-chip demo hidden" id="demoBadge">Demo feed</span>
+              <span class="hud-chip" id="hudState">Idle</span>
+              <span class="hud-chip hud-chip-right" id="hudStats">0 obj · -- ms</span>
+            </div>
+            <div class="empty-state" id="emptyState">
+              <div class="empty-copy">
+                <p class="empty-kicker">Camera or demo feed</p>
+                <p>Start a live stream. On GitHub Pages, inference stays in this tab.</p>
+              </div>
+              <button class="primary-button" id="startCamera" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <polygon points="6 4 20 12 6 20 6 4"></polygon>
+                </svg>
+                <span>Start camera</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <aside class="control-panel">
+          <details class="panel-group" open>
+            <summary>Capture</summary>
+            <div class="button-row">
+              <button class="primary-button" id="startCameraSide" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <polygon points="6 4 20 12 6 20 6 4"></polygon>
+                </svg>
+                <span>Start</span>
+              </button>
+              <button class="ghost-button" id="stopCamera" type="button" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12"></rect>
+                </svg>
+                <span>Stop</span>
+              </button>
+            </div>
+            <div class="button-row">
+              <button class="ghost-button" id="pauseButton" type="button" disabled>Pause</button>
+              <button class="ghost-button" id="snapshotButton" type="button" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M4 8h3l2-3h6l2 3h3v12H4z"></path>
+                  <circle cx="12" cy="13" r="4"></circle>
+                </svg>
+                <span>Snapshot</span>
+              </button>
+            </div>
+            <div class="control-group">
+              <label for="fpsRange">Frame rate</label>
+              <div class="range-row">
+                <input id="fpsRange" type="range" min="1" max="12" value="6" />
+                <output id="fpsValue">6 fps</output>
+              </div>
+            </div>
+            <div class="control-group">
+              <label for="widthRange">Processing width</label>
+              <div class="range-row">
+                <input id="widthRange" type="range" min="320" max="960" step="80" value="640" />
+                <output id="widthValue">640 px</output>
+              </div>
+            </div>
+            <div class="control-group">
+              <label for="uploadDetect">Detect still images</label>
+              <input id="uploadDetect" type="file" accept="image/*" multiple />
+              <p class="field-note" id="uploadDetectStatus">Show the image on the stage and run the active runtime.</p>
+            </div>
+          </details>
+
+          <details class="panel-group" open>
+            <summary>Model</summary>
+            <div class="mode-switch" role="group" aria-label="Inference runtime">
+              <button type="button" id="modeServer" aria-pressed="false">YOLOv8</button>
+              <button type="button" id="modeBrowser" aria-pressed="true">COCO-SSD</button>
+            </div>
+            <div class="control-group">
+              <label for="confidenceRange">Confidence</label>
+              <div class="range-row">
+                <input id="confidenceRange" type="range" min="0.05" max="0.95" step="0.05" value="0.35" />
+                <output id="confidenceValue">35%</output>
+              </div>
+            </div>
+            <div class="control-group">
+              <label for="classSearch">Classes</label>
+              <input id="classSearch" type="search" placeholder="Search classes" autocomplete="off" />
+              <div id="classChipList" class="class-chip-list"></div>
+              <p class="field-note">Empty selection means all classes. Chips toggle the filter.</p>
+            </div>
+            <div class="class-chips" id="classChips"></div>
+          </details>
+
+          <details class="panel-group">
+            <summary>Overlay</summary>
+            <label class="toggle-row" for="labelToggle">
+              <input id="labelToggle" type="checkbox" checked />
+              <span>Show labels</span>
+            </label>
+            <label class="toggle-row" for="heatmapToggle">
+              <input id="heatmapToggle" type="checkbox" checked />
+              <span>Detection heatmap</span>
+            </label>
+            <label class="toggle-row" for="cornerBoxToggle">
+              <input id="cornerBoxToggle" type="checkbox" />
+              <span>Corner bracket boxes</span>
+            </label>
+            <label class="toggle-row" for="trailToggle">
+              <input id="trailToggle" type="checkbox" checked />
+              <span>Tracker trails</span>
+            </label>
+            <label class="toggle-row" for="ghostToggle">
+              <input id="ghostToggle" type="checkbox" checked />
+              <span>Ghost persistence</span>
+            </label>
+            <div class="control-group">
+              <label for="ghostOpacityRange">Ghost fade</label>
+              <div class="range-row">
+                <input id="ghostOpacityRange" type="range" min="0.08" max="0.55" step="0.01" value="0.28" />
+                <output id="ghostOpacityValue">28%</output>
+              </div>
+            </div>
+            <label class="toggle-row" for="themeToggle">
+              <input id="themeToggle" type="checkbox" />
+              <span>Light theme</span>
+            </label>
+          </details>
+
+          <details class="panel-group">
+            <summary>Zones</summary>
+            <div class="button-row">
+              <button class="ghost-button" id="roiDrawButton" type="button" disabled>Draw zone</button>
+              <button class="ghost-button" id="roiClearButton" type="button" disabled>Clear zones</button>
+            </div>
+            <p class="field-note" id="roiStatus">No ROI zones set (max 3). Space pauses, S snapshots, Esc cancels draw.</p>
+            <label class="toggle-row" for="alertSoundToggle">
+              <input id="alertSoundToggle" type="checkbox" checked />
+              <span>ROI alert sound</span>
+            </label>
+          </details>
+
+          <details class="panel-group">
+            <summary>Privacy / audio</summary>
+            <label class="toggle-row" for="privacyToggle">
+              <input id="privacyToggle" type="checkbox" />
+              <span>Privacy cloak (blur people)</span>
+            </label>
+            <p class="field-note" id="privacyNote">On-device, frames stay in this tab.</p>
+            <div class="control-group">
+              <label for="privacyBlurRange">Privacy blur strength</label>
+              <div class="range-row">
+                <input id="privacyBlurRange" type="range" min="6" max="28" value="14" />
+                <output id="privacyBlurValue">14px</output>
+              </div>
+            </div>
+            <label class="toggle-row" for="sonifyToggle">
+              <input id="sonifyToggle" type="checkbox" />
+              <span>Detection sonification</span>
+            </label>
+            <label class="toggle-row" for="spatialAudioToggle">
+              <input id="spatialAudioToggle" type="checkbox" checked />
+              <span>Spatial audio pings</span>
+            </label>
+          </details>
+
+          <details class="panel-group">
+            <summary>Session</summary>
+            <div class="stats-grid session-grid">
+              <div class="stat">
+                <span>Frames</span>
+                <strong id="sessionFrames">0</strong>
+              </div>
+              <div class="stat">
+                <span>Total det.</span>
+                <strong id="sessionDetections">0</strong>
+              </div>
+              <div class="stat">
+                <span>ROI alerts</span>
+                <strong id="roiAlerts">0</strong>
+              </div>
+              <div class="stat">
+                <span>Classes</span>
+                <strong id="sessionClasses">0</strong>
+              </div>
+            </div>
+            <div class="stats-grid">
+              <div class="stat">
+                <span>Objects</span>
+                <strong id="objectCount">0</strong>
+              </div>
+              <div class="stat">
+                <span>Latency</span>
+                <strong id="latency">--</strong>
+              </div>
+              <div class="stat">
+                <span>Stream</span>
+                <strong id="streamFps">--</strong>
+              </div>
+              <div class="stat">
+                <span>Model</span>
+                <strong id="modelName">coco-ssd</strong>
+              </div>
+            </div>
+            <div class="latency-panel">
+              <div class="detections-head">
+                <h2>Latency</h2>
+                <span id="latencyAvg">--</span>
+              </div>
+              <canvas id="latencyChart" width="280" height="64"></canvas>
+            </div>
+            <div class="latency-panel">
+              <div class="detections-head">
+                <h2>Detection density</h2>
+                <span id="densityAvg">--</span>
+              </div>
+              <canvas id="densityChart" width="280" height="64"></canvas>
+            </div>
+            <div class="radar-panel">
+              <div class="detections-head">
+                <h2>Proximity radar</h2>
+                <span id="radarCount">0 blips</span>
+              </div>
+              <canvas id="proximityRadar" width="160" height="160"></canvas>
+            </div>
+            <div class="button-row">
+              <button class="ghost-button" id="exportHistoryButton" type="button" disabled>Export JSON</button>
+              <button class="ghost-button" id="clearHistoryButton" type="button" disabled>Clear history</button>
+            </div>
+            <div class="detections history-panel">
+              <div class="detections-head">
+                <h2>History</h2>
+                <span id="historyCount">0 events</span>
+              </div>
+              <ul id="historyList"></ul>
+            </div>
+            <div class="detections filmstrip-panel">
+              <div class="detections-head">
+                <h2>Alert filmstrip</h2>
+                <span id="filmstripCount">0 clips</span>
+              </div>
+              <button class="ghost-button" id="exportFilmstrip" type="button" disabled>Export gallery</button>
+              <div id="alertFilmstrip" class="alert-filmstrip"></div>
+            </div>
+            <div class="detections">
+              <div class="detections-head">
+                <h2>Detections</h2>
+                <span id="lastUpdated">Idle</span>
+              </div>
+              <ul id="detectionList"></ul>
+            </div>
+          </details>
+        </aside>
+      </section>
+
+      <canvas id="captureCanvas" aria-hidden="true"></canvas>
+    </main>
+  </body>
+</html>
