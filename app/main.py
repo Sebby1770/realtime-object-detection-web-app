@@ -11,13 +11,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.copilot import CopilotError, ask_copilot, provider_catalog
 from app.detector import clamp_confidence, detect_objects, model_info
 from app.stats import SessionStats
 from app.tracker import SimpleTracker
 from app.virtualcam import StudioBridge
 
 
-APP_VERSION = "2.4.0"
+APP_VERSION = "2.5.0"
 STUDIO_FRAME_BYTES = int(os.getenv("STUDIO_FRAME_BYTES", str(2 * 1024 * 1024)))
 studio_bridge = StudioBridge()
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,7 +35,7 @@ ACTIVE_CONNECTIONS = 0
 
 app = FastAPI(
     title="Real-Time Object Detection",
-    description="Dual-runtime live object detection: FastAPI + YOLOv8 locally, TensorFlow.js coco-ssd in the browser.",
+    description="Dual-runtime live object detection with an invisible studio effect and a Grok, ChatGPT, or Claude copilot.",
     version=APP_VERSION,
 )
 
@@ -95,6 +96,30 @@ async def health() -> dict[str, str | int]:
 @app.get("/api/model")
 async def model_metadata() -> dict[str, object]:
     return model_info()
+
+
+@app.get("/api/copilot")
+async def copilot_catalog() -> dict[str, object]:
+    return {"providers": provider_catalog()}
+
+
+@app.post("/api/copilot")
+async def copilot_ask(request: Request) -> dict[str, str]:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="Expected JSON.") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Expected a JSON object.")
+    try:
+        return await asyncio.to_thread(
+            ask_copilot,
+            str(body.get("provider") or ""),
+            str(body.get("apiKey") or ""),
+            body.get("messages"),
+        )
+    except CopilotError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
 
 
 @app.post("/api/detect")

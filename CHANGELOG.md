@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.5.0 — 2026-11-04
+
+### Added
+- **Home screen** with scene cards for Desk, Kitchen, and Street, plus a direct way into the studio.
+- **Go invisible** sets the outgoing picture to remove people and starts the camera.
+- **Copilot** panel with a choice of Grok (`grok-4.7`), ChatGPT (`chat-latest`), or Claude (`claude-sonnet-5`). An API key stays in this browser and is sent only to the local server with the question. Listen can dictate the question. Detection labels are optional. The reply is not drawn into the clean feed or the virtual camera.
+
+### Changed
+- The Disappear studio control is labeled Invisible.
+- Application version **2.5.0**
+
 ## 2.4.0 — 2026-11-04
 
 ### Added

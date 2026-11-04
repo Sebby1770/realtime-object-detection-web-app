@@ -21,8 +21,8 @@
     <meta name="twitter:card" content="summary" />
     <title>Realtime Detection Console</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="static/styles.css?v=2.4.1" />
-    <script type="module" src="static/app.js?v=2.4.0"></script>
+    <link rel="stylesheet" href="static/styles.css?v=2.5.0" />
+    <script type="module" src="static/app.js?v=2.5.0"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -43,7 +43,54 @@
         </div>
       </header>
 
-      <section class="workspace">
+      <div class="console-grid">
+        <div class="console-main">
+          <section class="home-screen" id="homeScreen">
+            <div class="home-hero">
+              <p class="home-kicker">Studio</p>
+              <h2>Leave the picture. Keep the conversation.</h2>
+              <p class="home-lead">
+                Invisible takes people out of the camera you send to Zoom, Photo Booth, and the rest.
+                Copilot sits beside the picture and can ask Grok, ChatGPT, or Claude. The answer stays in this panel.
+              </p>
+              <div class="home-actions">
+                <button class="primary-button home-invisible" id="goInvisible" type="button" data-go-invisible>
+                  Go invisible
+                </button>
+                <button class="ghost-button" type="button" data-start-camera>Start camera</button>
+              </div>
+            </div>
+            <div class="scene-grid" aria-label="Sample scenes">
+              <button type="button" class="scene-card" data-sample="desk">
+                <img src="static/samples/desk.jpg" alt="" />
+                <span>Desk</span>
+              </button>
+              <button type="button" class="scene-card" data-sample="kitchen">
+                <img src="static/samples/kitchen.jpg" alt="" />
+                <span>Kitchen</span>
+              </button>
+              <button type="button" class="scene-card" data-sample="street">
+                <img src="static/samples/street.jpg" alt="" />
+                <span>Street</span>
+              </button>
+            </div>
+            <ul class="home-points">
+              <li>
+                <strong>Invisible</strong>
+                <span>People leave the outgoing picture. Press B once the room is empty to learn the background.</span>
+              </li>
+              <li>
+                <strong>Copilot</strong>
+                <span>Switch Grok, ChatGPT, and Claude. Listen, then ask. Labels can go with the question. The frame does not.</span>
+              </li>
+              <li>
+                <strong>Clean feed</strong>
+                <span>Share the picture without this panel, the boxes, or the copilot.</span>
+              </li>
+            </ul>
+          </section>
+
+          <section class="workspace is-parked" id="studioWorkspace">
         <div class="stage-panel">
           <div class="video-stage" id="videoStage">
             <video id="video" autoplay playsinline muted></video>
@@ -54,6 +101,7 @@
             <div class="stage-hud" aria-hidden="true">
               <span class="hud-chip demo hidden" id="demoBadge">Demo feed</span>
               <span class="hud-chip" id="hudState">Idle</span>
+              <span class="hud-chip invisible-chip hidden" id="invisibleChip">Invisible</span>
               <span class="hud-chip hud-chip-right" id="hudStats">0 obj · -- ms</span>
             </div>
             <div class="empty-state" id="emptyState">
@@ -61,7 +109,7 @@
                 <p class="empty-kicker">Camera or sample scene</p>
                 <p>Start a live stream, or run coco-ssd on a still that actually contains objects. On GitHub Pages, inference stays in this tab.</p>
               </div>
-              <button class="primary-button" id="startCamera" type="button">
+              <button class="primary-button" id="startCamera" type="button" data-start-camera>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                   <polygon points="6 4 20 12 6 20 6 4"></polygon>
                 </svg>
@@ -170,7 +218,7 @@
             <p class="field-note" id="studioNote">Disappear removes detected people. Step out once and capture a background plate for a clean vanish.</p>
             <div class="effect-grid" role="group" aria-label="Studio effects">
               <button type="button" class="ghost-button" data-effect="none" aria-pressed="true">Off</button>
-              <button type="button" class="ghost-button" data-effect="disappear">Disappear</button>
+              <button type="button" class="ghost-button" data-effect="disappear">Invisible</button>
               <button type="button" class="ghost-button" data-effect="portrait">Portrait blur</button>
               <button type="button" class="ghost-button" data-effect="replace">Replace background</button>
               <button type="button" class="ghost-button" data-effect="pixelate">Pixelate</button>
@@ -412,7 +460,39 @@
             </div>
           </details>
         </aside>
-      </section>
+          </section>
+        </div>
+
+        <aside class="copilot" id="copilot" aria-label="Copilot">
+          <div class="copilot-head">
+            <p class="home-kicker">Copilot</p>
+            <h2>Ask the studio</h2>
+          </div>
+          <div class="provider-switch" role="radiogroup" aria-label="Model">
+            <button type="button" data-provider="grok" aria-pressed="true">Grok</button>
+            <button type="button" data-provider="openai" aria-pressed="false">ChatGPT</button>
+            <button type="button" data-provider="anthropic" aria-pressed="false">Claude</button>
+          </div>
+          <p class="copilot-model" id="copilotModel">grok-4.7 · xAI</p>
+          <label class="copilot-key" for="copilotKey">
+            API key
+            <input id="copilotKey" type="password" autocomplete="off" spellcheck="false" placeholder="Stored only in this browser" />
+          </label>
+          <label class="toggle-row" for="copilotUseScene">
+            <input id="copilotUseScene" type="checkbox" />
+            <span>Include detection labels</span>
+          </label>
+          <div class="copilot-thread" id="copilotThread" aria-live="polite"></div>
+          <textarea id="copilotInput" rows="3" maxlength="4000" placeholder="Ask about the scene, or dictate with Listen"></textarea>
+          <div class="copilot-actions">
+            <button type="button" class="ghost-button" id="copilotListen">Listen</button>
+            <button type="button" class="primary-button" id="copilotAsk">Ask</button>
+          </div>
+          <p class="field-note" id="copilotStatus">
+            Answers stay in this panel. They are not drawn into the clean feed or the virtual camera.
+          </p>
+        </aside>
+      </div>
 
       <canvas id="captureCanvas" aria-hidden="true"></canvas>
     </main>

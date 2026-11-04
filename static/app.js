@@ -38,7 +38,13 @@ import {
   videoAppGuide,
 } from "./studio.js";
 
-const APP_VERSION = "2.4.0";
+const APP_VERSION = "2.5.0";
+const COPILOT_KEY = "object-detection-copilot";
+const COPILOT_PROVIDERS = {
+  grok: { label: "Grok", model: "grok-4.7", vendor: "xAI" },
+  openai: { label: "ChatGPT", model: "chat-latest", vendor: "OpenAI" },
+  anthropic: { label: "Claude", model: "claude-sonnet-5", vendor: "Anthropic" },
+};
 const ROI_COOLDOWN_MS = 1200;
 const CAMERA_TIMEOUT_MS = 8000;
 const MAX_ROIS = 3;
@@ -144,6 +150,17 @@ const elements = {
   boothCountdown: document.querySelector("#boothCountdown"),
   boothPreview: document.querySelector("#boothPreview"),
   downloadBooth: document.querySelector("#downloadBooth"),
+  homeScreen: document.querySelector("#homeScreen"),
+  studioWorkspace: document.querySelector("#studioWorkspace"),
+  invisibleChip: document.querySelector("#invisibleChip"),
+  copilotKey: document.querySelector("#copilotKey"),
+  copilotModel: document.querySelector("#copilotModel"),
+  copilotThread: document.querySelector("#copilotThread"),
+  copilotInput: document.querySelector("#copilotInput"),
+  copilotListen: document.querySelector("#copilotListen"),
+  copilotAsk: document.querySelector("#copilotAsk"),
+  copilotStatus: document.querySelector("#copilotStatus"),
+  copilotUseScene: document.querySelector("#copilotUseScene"),
 };
 
 const SAMPLE_SCENES = {
@@ -231,6 +248,9 @@ const state = {
     roi_alerts: 0,
   },
   studioEffect: "none",
+  copilotProvider: "grok",
+  copilotMessages: [],
+  copilotListener: null,
   vanishMode: "people",
   studioPad: 0.18,
   backgroundColor: "#1f8a70",
@@ -707,6 +727,7 @@ async function loadSampleScene(id) {
   if (!scene) {
     return;
   }
+  revealStudio();
   await resumeAudio();
   if (state.stream) {
     state.stream.getTracks().forEach((track) => track.stop());
@@ -730,6 +751,7 @@ async function startCamera() {
   if (state.running) {
     return;
   }
+  revealStudio();
   await resumeAudio();
   clearStageMedia();
 
@@ -806,6 +828,7 @@ function stopCamera() {
     elements.hudStats.textContent = "0 obj · -- ms";
   }
   elements.emptyState.classList.remove("hidden");
+  showHome();
   elements.startCameraSide.disabled = false;
   elements.stopCamera.disabled = true;
   elements.snapshotButton.disabled = true;
@@ -1138,6 +1161,7 @@ async function toggleFullscreen() {
 }
 
 function startSyntheticDemo() {
+  revealStudio();
   clearStageMedia();
   const stream = createDemoStream();
   state.stream = stream;
@@ -1640,16 +1664,44 @@ function markStudioEffect(effect) {
   document.querySelectorAll("[data-effect]").forEach((button) => {
     button.setAttribute("aria-pressed", button.dataset.effect === effect ? "true" : "false");
   });
+  elements.invisibleChip?.classList.toggle("hidden", effect !== "disappear");
+}
+
+function revealStudio() {
+  elements.homeScreen?.classList.add("hidden");
+  elements.studioWorkspace?.classList.remove("is-parked");
+}
+
+function showHome() {
+  elements.homeScreen?.classList.remove("hidden");
+  elements.studioWorkspace?.classList.add("is-parked");
 }
 
 function setStudioEffect(effect) {
   state.studioEffect = effect;
   markStudioEffect(effect);
-  if (effect !== "disappear") {
+  if (effect === "disappear") {
     elements.studioNote.textContent =
-      "Effects are burned into the clean feed, the recording, and the virtual camera. D toggles disappear.";
+      "Invisible is on. People leave the outgoing picture. Press B once the room is empty to learn the background.";
+  } else {
+    elements.studioNote.textContent =
+      "Effects are burned into the clean feed, the recording, and the virtual camera. D toggles invisible.";
   }
   saveSettings();
+}
+
+function goInvisible() {
+  state.vanishMode = "people";
+  if (elements.vanishMode) {
+    elements.vanishMode.value = "people";
+  }
+  setStudioEffect("disappear");
+  revealStudio();
+  if (!state.running && !state.stillMode && !state.demoMode) {
+    startCamera().catch((error) => {
+      elements.lastUpdated.textContent = error.message || "Could not start the camera.";
+    });
+  }
 }
 
 function renderVideoAppGuide(id = state.videoApp) {
@@ -1821,9 +1873,16 @@ elements.fullscreenButton?.addEventListener("click", () => {
 });
 elements.syntheticDemoButton?.addEventListener("click", startSyntheticDemo);
 
-elements.startCamera.addEventListener("click", () => {
-  startCamera().catch((error) => {
-    elements.lastUpdated.textContent = error.message;
+document.querySelectorAll("[data-start-camera]").forEach((button) => {
+  button.addEventListener("click", () => {
+    startCamera().catch((error) => {
+      elements.lastUpdated.textContent = error.message;
+    });
+  });
+});
+document.querySelectorAll("[data-go-invisible]").forEach((button) => {
+  button.addEventListener("click", () => {
+    goInvisible();
   });
 });
 elements.startCameraSide.addEventListener("click", () => {
@@ -2100,5 +2159,187 @@ async function boot() {
   elements.lastUpdated.textContent = `v${APP_VERSION} ready`;
 }
 
+function readCopilotStore() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(COPILOT_KEY) || "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCopilotStore(patch) {
+  const current = readCopilotStore();
+  localStorage.setItem(COPILOT_KEY, JSON.stringify({ ...current, ...patch }));
+}
+
+function sceneLabelSummary() {
+  const counts = {};
+  for (const detection of state.detections) {
+    const label = detection.label || detection.class || "object";
+    counts[label] = (counts[label] || 0) + 1;
+  }
+  const parts = Object.entries(counts).map(([label, count]) => `${count} ${label}`);
+  return parts.length ? parts.join(", ") : "nothing detected";
+}
+
+function renderCopilotThread() {
+  if (!elements.copilotThread) {
+    return;
+  }
+  elements.copilotThread.replaceChildren();
+  for (const message of state.copilotMessages) {
+    const bubble = document.createElement("div");
+    bubble.className = `copilot-bubble ${message.role === "assistant" ? "assistant" : "user"}`;
+    bubble.textContent = message.content;
+    elements.copilotThread.append(bubble);
+  }
+  elements.copilotThread.scrollTop = elements.copilotThread.scrollHeight;
+}
+
+function selectCopilotProvider(provider, keepTyped = true) {
+  const spec = COPILOT_PROVIDERS[provider];
+  if (!spec) {
+    return;
+  }
+  const store = readCopilotStore();
+  const keys = store.keys && typeof store.keys === "object" ? { ...store.keys } : {};
+  if (keepTyped && elements.copilotKey && state.copilotProvider !== provider) {
+    keys[state.copilotProvider] = elements.copilotKey.value;
+  }
+  state.copilotProvider = provider;
+  writeCopilotStore({ provider, keys });
+  document.querySelectorAll("[data-provider]").forEach((button) => {
+    button.setAttribute("aria-pressed", button.dataset.provider === provider ? "true" : "false");
+  });
+  if (elements.copilotModel) {
+    elements.copilotModel.textContent = `${spec.model} · ${spec.vendor}`;
+  }
+  if (elements.copilotKey) {
+    elements.copilotKey.value = keys[provider] || "";
+    elements.copilotKey.placeholder = `${spec.label} key, stored only in this browser`;
+  }
+}
+
+function toggleCopilotListen() {
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!Recognition) {
+    elements.copilotStatus.textContent = "This browser has no speech recognition. Type the question instead.";
+    return;
+  }
+  if (state.copilotListener) {
+    state.copilotListener.stop();
+    state.copilotListener = null;
+    elements.copilotListen.textContent = "Listen";
+    return;
+  }
+  const listener = new Recognition();
+  listener.continuous = true;
+  listener.interimResults = true;
+  listener.onresult = (event) => {
+    let text = "";
+    for (let index = 0; index < event.results.length; index += 1) {
+      text += event.results[index][0].transcript;
+    }
+    elements.copilotInput.value = text.trim().slice(0, 4000);
+  };
+  listener.onerror = () => {
+    elements.copilotStatus.textContent = "Listening stopped.";
+    elements.copilotListen.textContent = "Listen";
+    state.copilotListener = null;
+  };
+  listener.onend = () => {
+    if (state.copilotListener === listener) {
+      elements.copilotListen.textContent = "Listen";
+      state.copilotListener = null;
+    }
+  };
+  state.copilotListener = listener;
+  elements.copilotListen.textContent = "Stop";
+  elements.copilotStatus.textContent = "Listening. Ask when the line sounds right.";
+  listener.start();
+}
+
+async function askCopilot() {
+  const typed = elements.copilotInput.value.trim();
+  const apiKey = elements.copilotKey.value.trim();
+  if (!apiKey) {
+    elements.copilotStatus.textContent =
+      "Add an API key for this model. It stays in this browser and is sent only to the local server with your question.";
+    return;
+  }
+  if (!typed) {
+    elements.copilotStatus.textContent = "Write a question, or use Listen.";
+    return;
+  }
+  let content = typed;
+  if (elements.copilotUseScene?.checked) {
+    content = `${typed}\n\nScene labels: ${sceneLabelSummary()}.`;
+  }
+  state.copilotMessages.push({ role: "user", content });
+  renderCopilotThread();
+  elements.copilotInput.value = "";
+  elements.copilotAsk.disabled = true;
+  elements.copilotStatus.textContent = "Asking…";
+  try {
+    const response = await fetch("/api/copilot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        provider: state.copilotProvider,
+        apiKey,
+        messages: state.copilotMessages.slice(-12),
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      state.copilotMessages.pop();
+      renderCopilotThread();
+      elements.copilotStatus.textContent = payload.detail || "Copilot could not answer.";
+      return;
+    }
+    state.copilotMessages.push({ role: "assistant", content: String(payload.reply || "") });
+    renderCopilotThread();
+    elements.copilotStatus.textContent = `${payload.model || state.copilotProvider} answered. This panel is not part of the outgoing picture.`;
+  } catch {
+    state.copilotMessages.pop();
+    renderCopilotThread();
+    elements.copilotStatus.textContent =
+      "Copilot needs the local server. On GitHub Pages the camera still runs in the browser, and this panel cannot call a model.";
+  } finally {
+    elements.copilotAsk.disabled = false;
+  }
+}
+
+function bootCopilot() {
+  const store = readCopilotStore();
+  const provider = COPILOT_PROVIDERS[store.provider] ? store.provider : "grok";
+  selectCopilotProvider(provider, false);
+  document.querySelectorAll("[data-provider]").forEach((button) => {
+    button.addEventListener("click", () => selectCopilotProvider(button.dataset.provider));
+  });
+  elements.copilotKey?.addEventListener("change", () => {
+    const saved = readCopilotStore();
+    const keys = saved.keys && typeof saved.keys === "object" ? { ...saved.keys } : {};
+    keys[state.copilotProvider] = elements.copilotKey.value;
+    writeCopilotStore({ provider: state.copilotProvider, keys });
+  });
+  elements.copilotListen?.addEventListener("click", toggleCopilotListen);
+  elements.copilotAsk?.addEventListener("click", () => {
+    askCopilot().catch(() => {
+      elements.copilotStatus.textContent = "Copilot could not answer.";
+    });
+  });
+  elements.copilotInput?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      askCopilot().catch(() => {
+        elements.copilotStatus.textContent = "Copilot could not answer.";
+      });
+    }
+  });
+}
+
+bootCopilot();
 boot();
 renderStage();
