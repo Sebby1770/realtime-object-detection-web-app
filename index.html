@@ -21,8 +21,8 @@
     <meta name="twitter:card" content="summary" />
     <title>Realtime Detection Console</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="static/styles.css?v=2.5.0" />
-    <script type="module" src="static/app.js?v=2.5.0"></script>
+    <link rel="stylesheet" href="static/styles.css?v=2.8.0" />
+    <script type="module" src="static/app.js?v=2.8.0"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -47,32 +47,34 @@
         <div class="console-main">
           <section class="home-screen" id="homeScreen">
             <div class="home-hero">
-              <p class="home-kicker">Studio</p>
-              <h2>Leave the picture. Keep the conversation.</h2>
-              <p class="home-lead">
-                Invisible takes people out of the camera you send to Zoom, Photo Booth, and the rest.
-                Copilot sits beside the picture and can ask Grok, ChatGPT, or Claude. The answer stays in this panel.
-              </p>
-              <div class="home-actions">
-                <button class="primary-button home-invisible" id="goInvisible" type="button" data-go-invisible>
-                  Go invisible
-                </button>
-                <button class="ghost-button" type="button" data-start-camera>Start camera</button>
+              <div class="home-copy">
+                <p class="home-kicker">Studio</p>
+                <h2>Leave the picture. Keep the conversation.</h2>
+                <p class="home-lead">
+                  Invisible takes people out of the camera you send to Zoom, Photo Booth, and the rest.
+                  Copilot sits beside the picture and can ask Grok, ChatGPT, or Claude. The answer stays in this panel.
+                </p>
+                <div class="home-actions">
+                  <button class="primary-button home-invisible" id="goInvisible" type="button" data-go-invisible>
+                    Go invisible
+                  </button>
+                  <button class="ghost-button" type="button" data-start-camera>Start camera</button>
+                </div>
               </div>
-            </div>
-            <div class="scene-grid" aria-label="Sample scenes">
-              <button type="button" class="scene-card" data-sample="desk">
-                <img src="static/samples/desk.jpg" alt="" />
-                <span>Desk</span>
-              </button>
-              <button type="button" class="scene-card" data-sample="kitchen">
-                <img src="static/samples/kitchen.jpg" alt="" />
-                <span>Kitchen</span>
-              </button>
-              <button type="button" class="scene-card" data-sample="street">
-                <img src="static/samples/street.jpg" alt="" />
-                <span>Street</span>
-              </button>
+              <div class="scene-grid" aria-label="Sample scenes">
+                <button type="button" class="scene-card" data-sample="desk">
+                  <img src="static/samples/desk.jpg" alt="" />
+                  <span>Desk</span>
+                </button>
+                <button type="button" class="scene-card" data-sample="kitchen">
+                  <img src="static/samples/kitchen.jpg" alt="" />
+                  <span>Kitchen</span>
+                </button>
+                <button type="button" class="scene-card" data-sample="street">
+                  <img src="static/samples/street.jpg" alt="" />
+                  <span>Street</span>
+                </button>
+              </div>
             </div>
             <ul class="home-points">
               <li>
@@ -98,12 +100,6 @@
             <canvas id="heatmap"></canvas>
             <canvas id="overlay"></canvas>
             <div class="booth-countdown hidden" id="boothCountdown" aria-live="assertive"></div>
-            <div class="stage-hud" aria-hidden="true">
-              <span class="hud-chip demo hidden" id="demoBadge">Demo feed</span>
-              <span class="hud-chip" id="hudState">Idle</span>
-              <span class="hud-chip invisible-chip hidden" id="invisibleChip">Invisible</span>
-              <span class="hud-chip hud-chip-right" id="hudStats">0 obj · -- ms</span>
-            </div>
             <div class="empty-state" id="emptyState">
               <div class="empty-copy">
                 <p class="empty-kicker">Camera or sample scene</p>
@@ -126,9 +122,33 @@
               <p class="model-overlay-status" id="modelOverlayStatus">TensorFlow.js…</p>
             </div>
           </div>
+          <div class="stage-hud" aria-hidden="true">
+            <span class="hud-chip demo hidden" id="demoBadge">Demo feed</span>
+            <span class="hud-chip" id="hudState">Idle</span>
+            <span class="hud-chip invisible-chip hidden" id="invisibleChip">Invisible</span>
+            <span class="hud-chip hud-chip-right" id="hudStats">0 obj · -- ms</span>
+          </div>
+          <div class="look-bar" role="group" aria-label="Looks">
+            <button class="ghost-button" type="button" data-look="call">Call</button>
+            <button class="ghost-button" type="button" data-look="booth">Booth</button>
+            <button class="ghost-button" type="button" data-look="plain">Plain</button>
+          </div>
         </div>
 
         <aside class="control-panel">
+          <div class="detections diary-panel">
+            <div class="detections-head">
+              <h2>Scene diary</h2>
+              <div class="diary-actions">
+                <button class="ghost-button compact-button" id="diarySave" type="button">Save</button>
+                <button class="ghost-button compact-button" id="diaryClear" type="button">Clear</button>
+              </div>
+            </div>
+            <p class="field-note" id="diaryEmpty">Changes in the frame show up here. Nothing is uploaded.</p>
+            <ul id="diaryList"></ul>
+            <button class="ghost-button" id="diaryAsk" type="button">Use the latest line</button>
+          </div>
+
           <details class="panel-group" open>
             <summary>Capture</summary>
             <div class="button-row">

@@ -23,7 +23,10 @@ On Pages, click **Desk**, **Kitchen**, or **Street** if you do not want to grant
 - Light theme that actually restyles the page background.
 - Studio effects on the outgoing picture: Invisible (people removed), portrait blur, background replace, pixelate, spotlight, and outline. Color grades (warm, noir, vivid, dawn) tint that same picture. Mirror (`M`) flips it for a call, auto frame zooms toward people, and a name plate is burned in as readable text. `D` toggles invisible, `B` captures a background plate, `P` runs the photo booth.
 - Home screen with sample scenes and a **Go invisible** button.
-- Copilot beside the picture. Pick **Grok**, **ChatGPT**, or **Claude**, paste that provider's API key, and ask. Listen uses the browser speech recognizer. "Include detection labels" sends class counts, not the camera frame. Replies stay in the panel and are not burned into the clean feed or virtual camera. GitHub Pages can still run detection on-device; the copilot call needs the local server. Keys are not written into the repo.
+- Copilot beside the picture. Pick **Grok**, **ChatGPT**, or **Claude**, paste that provider's API key, and ask. Listen uses the browser speech recognizer. "Include detection labels" sends class counts, not the camera frame. Replies stay in the panel and are not burned into the clean feed or virtual camera. The thread is remembered in this browser, apart from the key. GitHub Pages can still run detection on-device; the copilot call needs the local server. Keys are not written into the repo.
+- Scene diary lists what entered or left the frame. "Use the latest line" only fills the copilot box. Save downloads those lines as text.
+- Looks under the picture: **Call** removes people, **Booth** is a warm portrait, and **Plain** clears the effect, the grade, and the mirror.
+- The picture is the top of the studio. The status bar, including Invisible and Learning plate, sits under the frame instead of on top of the boxes.
 - Photo booth: countdown, four-shot strip, PNG download.
 - Clean-feed window for screen share, WebM recording, and a local virtual-camera bridge (`OBS Virtual Camera` via `pyvirtualcam`) plus an MJPEG URL for OBS.
 

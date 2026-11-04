@@ -61,7 +61,7 @@ def test_health_reports_version() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-    assert response.json()["version"] == "2.5.0"
+    assert response.json()["version"] == "2.8.0"
 
 
 def test_virtualcam_bridge_accepts_jpeg_frames() -> None:
@@ -342,5 +342,7 @@ def test_index_served_from_repo_root() -> None:
     assert "ChatGPT" in response.text
     assert "Claude" in response.text
     assert 'data-provider="grok"' in response.text
+    assert "Scene diary" in response.text
+    assert 'data-look="call"' in response.text
     assert "static/app.js" in response.text
     assert "unpkg.com/lucide" not in response.text

@@ -37,8 +37,9 @@ import {
   learnPlate,
   videoAppGuide,
 } from "./studio.js";
+import { countLabels, diaryDocument, diaryLine, diffCounts } from "./scene-diary.js";
 
-const APP_VERSION = "2.5.0";
+const APP_VERSION = "2.8.0";
 const COPILOT_KEY = "object-detection-copilot";
 const COPILOT_PROVIDERS = {
   grok: { label: "Grok", model: "grok-4.7", vendor: "xAI" },
@@ -251,6 +252,10 @@ const state = {
   copilotProvider: "grok",
   copilotMessages: [],
   copilotListener: null,
+  diary: [],
+  diaryCounts: {},
+  diaryReady: false,
+  diaryLastLine: "",
   vanishMode: "people",
   studioPad: 0.18,
   backgroundColor: "#1f8a70",
@@ -559,6 +564,7 @@ function applyDetections(payload) {
     state.ghostDetections = [];
   }
   state.detections = payload.detections ?? [];
+  noteSceneDiary(state.detections);
   state.classCounts = payload.class_counts ?? {};
   state.frameSize = {
     width: payload.frame_width || 1,
@@ -817,6 +823,7 @@ function stopCamera() {
   clearStageMedia();
   resetBrowserSession();
   state.detections = [];
+  noteSceneDiary([]);
   state.ghostDetections = [];
   renderDetectionList();
   elements.objectCount.textContent = "0";
@@ -1611,6 +1618,9 @@ function renderStudio() {
     hudText,
   });
   if (state.studioEffect === "disappear") {
+    if (elements.invisibleChip) {
+      elements.invisibleChip.textContent = rendered.plateReady ? "Invisible" : "Learning plate";
+    }
     elements.studioNote.textContent = rendered.plateReady
       ? "Disappear is using the captured background. Move, and the room stays behind you."
       : "Blur vanish is on. Step out of frame, or press Capture plate, for a solid background.";
@@ -1677,9 +1687,16 @@ function showHome() {
   elements.studioWorkspace?.classList.add("is-parked");
 }
 
+function markLook(name) {
+  document.querySelectorAll("[data-look]").forEach((button) => {
+    button.setAttribute("aria-pressed", button.dataset.look === name ? "true" : "false");
+  });
+}
+
 function setStudioEffect(effect) {
   state.studioEffect = effect;
   markStudioEffect(effect);
+  markLook("");
   if (effect === "disappear") {
     elements.studioNote.textContent =
       "Invisible is on. People leave the outgoing picture. Press B once the room is empty to learn the background.";
@@ -1688,6 +1705,52 @@ function setStudioEffect(effect) {
       "Effects are burned into the clean feed, the recording, and the virtual camera. D toggles invisible.";
   }
   saveSettings();
+}
+
+function applyLook(name) {
+  const looks = {
+    call: {
+      effect: "disappear",
+      grade: "none",
+      mirror: false,
+      vanishMode: "people",
+      note: "Call look: people leave the picture.",
+    },
+    booth: {
+      effect: "portrait",
+      grade: "warm",
+      note: "Booth look: a warm portrait.",
+    },
+    plain: {
+      effect: "none",
+      grade: "none",
+      mirror: false,
+      note: "Plain look: the picture is unchanged.",
+    },
+  };
+  const look = looks[name];
+  if (!look) {
+    return;
+  }
+  if (look.vanishMode) {
+    state.vanishMode = look.vanishMode;
+    if (elements.vanishMode) {
+      elements.vanishMode.value = look.vanishMode;
+    }
+  }
+  state.grade = look.grade;
+  if (elements.gradeSelect) {
+    elements.gradeSelect.value = look.grade;
+  }
+  if (Object.hasOwn(look, "mirror")) {
+    state.mirror = look.mirror;
+    if (elements.mirrorToggle) {
+      elements.mirrorToggle.checked = look.mirror;
+    }
+  }
+  setStudioEffect(look.effect);
+  elements.studioNote.textContent = look.note;
+  markLook(name);
 }
 
 function goInvisible() {
@@ -2075,6 +2138,7 @@ window.addEventListener("keydown", (event) => {
     elements.studioNote.textContent = state.mirror
       ? "Mirror is on. The outgoing picture is flipped left to right."
       : "Mirror is off.";
+    markLook("");
     saveSettings();
   }
 });
@@ -2082,11 +2146,15 @@ window.addEventListener("keydown", (event) => {
 document.querySelectorAll("[data-effect]").forEach((button) => {
   button.addEventListener("click", () => setStudioEffect(button.dataset.effect));
 });
+document.querySelectorAll("[data-look]").forEach((button) => {
+  button.addEventListener("click", () => applyLook(button.dataset.look));
+});
 document.querySelectorAll("[data-video-app]").forEach((button) => {
   button.addEventListener("click", () => renderVideoAppGuide(button.dataset.videoApp));
 });
 elements.vanishMode.addEventListener("change", (event) => {
   state.vanishMode = event.target.value;
+  markLook("");
   saveSettings();
 });
 elements.padRange.addEventListener("input", (event) => {
@@ -2100,10 +2168,12 @@ elements.backgroundColor.addEventListener("input", (event) => {
 });
 elements.gradeSelect.addEventListener("change", (event) => {
   state.grade = event.target.value;
+  markLook("");
   saveSettings();
 });
 elements.mirrorToggle.addEventListener("change", (event) => {
   state.mirror = event.target.checked;
+  markLook("");
   saveSettings();
 });
 elements.autoFrameToggle.addEventListener("change", (event) => {
@@ -2159,6 +2229,42 @@ async function boot() {
   elements.lastUpdated.textContent = `v${APP_VERSION} ready`;
 }
 
+function noteSceneDiary(detections) {
+  const next = countLabels(detections);
+  if (!state.diaryReady) {
+    state.diaryCounts = next;
+    state.diaryReady = true;
+    return;
+  }
+  const line = diaryLine(diffCounts(state.diaryCounts, next));
+  state.diaryCounts = next;
+  if (!line || line === state.diaryLastLine) {
+    return;
+  }
+  state.diaryLastLine = line;
+  const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  state.diary.unshift({ at: stamp, line });
+  state.diary = state.diary.slice(0, 40);
+  renderDiary();
+}
+
+function renderDiary() {
+  const list = document.querySelector("#diaryList");
+  const empty = document.querySelector("#diaryEmpty");
+  if (!list) {
+    return;
+  }
+  list.replaceChildren();
+  if (empty) {
+    empty.classList.toggle("hidden", state.diary.length > 0);
+  }
+  for (const entry of state.diary) {
+    const item = document.createElement("li");
+    item.textContent = `${entry.at}  ${entry.line}`;
+    list.append(item);
+  }
+}
+
 function readCopilotStore() {
   try {
     const saved = JSON.parse(localStorage.getItem(COPILOT_KEY) || "{}");
@@ -2171,6 +2277,14 @@ function readCopilotStore() {
 function writeCopilotStore(patch) {
   const current = readCopilotStore();
   localStorage.setItem(COPILOT_KEY, JSON.stringify({ ...current, ...patch }));
+}
+
+function persistCopilotThread() {
+  const thread = state.copilotMessages.slice(-30).map((message) => ({
+    role: message.role === "assistant" ? "assistant" : "user",
+    content: String(message.content || "").slice(0, 4000),
+  }));
+  writeCopilotStore({ thread });
 }
 
 function sceneLabelSummary() {
@@ -2299,6 +2413,7 @@ async function askCopilot() {
       return;
     }
     state.copilotMessages.push({ role: "assistant", content: String(payload.reply || "") });
+    persistCopilotThread();
     renderCopilotThread();
     elements.copilotStatus.textContent = `${payload.model || state.copilotProvider} answered. This panel is not part of the outgoing picture.`;
   } catch {
@@ -2314,6 +2429,17 @@ async function askCopilot() {
 function bootCopilot() {
   const store = readCopilotStore();
   const provider = COPILOT_PROVIDERS[store.provider] ? store.provider : "grok";
+  if (Array.isArray(store.thread)) {
+    state.copilotMessages = store.thread
+      .filter((message) => message && (message.role === "user" || message.role === "assistant"))
+      .slice(-30)
+      .map((message) => ({
+        role: message.role,
+        content: String(message.content || "").slice(0, 4000),
+      }))
+      .filter((message) => message.content);
+    renderCopilotThread();
+  }
   selectCopilotProvider(provider, false);
   document.querySelectorAll("[data-provider]").forEach((button) => {
     button.addEventListener("click", () => selectCopilotProvider(button.dataset.provider));
@@ -2329,6 +2455,32 @@ function bootCopilot() {
     askCopilot().catch(() => {
       elements.copilotStatus.textContent = "Copilot could not answer.";
     });
+  });
+  document.querySelector("#diarySave")?.addEventListener("click", () => {
+    const blob = new Blob([diaryDocument(state.diary)], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "scene-diary.txt";
+    link.click();
+    URL.revokeObjectURL(url);
+  });
+  document.querySelector("#diaryClear")?.addEventListener("click", () => {
+    state.diary = [];
+    state.diaryLastLine = "";
+    renderDiary();
+  });
+  document.querySelector("#diaryAsk")?.addEventListener("click", () => {
+    const latest = state.diary[0]?.line;
+    if (!latest || !elements.copilotInput) {
+      if (elements.copilotStatus) {
+        elements.copilotStatus.textContent = "The diary is empty until the scene changes.";
+      }
+      return;
+    }
+    elements.copilotInput.value = latest;
+    elements.copilotInput.focus();
+    elements.copilotStatus.textContent = "The latest diary line is in the box. Ask when you want a reply.";
   });
   elements.copilotInput?.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {

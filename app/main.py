@@ -18,7 +18,7 @@ from app.tracker import SimpleTracker
 from app.virtualcam import StudioBridge
 
 
-APP_VERSION = "2.5.0"
+APP_VERSION = "2.8.0"
 STUDIO_FRAME_BYTES = int(os.getenv("STUDIO_FRAME_BYTES", str(2 * 1024 * 1024)))
 studio_bridge = StudioBridge()
 BASE_DIR = Path(__file__).resolve().parent.parent

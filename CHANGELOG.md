@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.8.0 — 2026-11-05
+
+### Added
+- **Looks** under the picture: Call removes people with a flat grade, Booth sets a warm portrait, and Plain clears the effect, grade, and mirror.
+- **Save** on the scene diary downloads the lines as a text file on this computer.
+
+### Changed
+- Application version **2.8.0**
+
+## 2.7.0 — 2026-11-04
+
+### Changed
+- The studio layout puts the picture first. Status chips sit under the frame, so detection labels no longer cover them. Controls and the scene diary share the space below the picture, and the copilot stays in its own column.
+- Application version **2.7.0**
+
+## 2.6.0 — 2026-11-04
+
+### Added
+- **Scene diary** records what entered or left the frame. It stays on this computer. "Use the latest line" copies that sentence into the copilot box and does not send it.
+- The copilot thread is remembered in this browser, separately from the API key. The Invisible chip says "Learning plate" until a background plate exists.
+
+### Changed
+- Application version **2.6.0**
+
 ## 2.5.0 — 2026-11-04
 
 ### Added
