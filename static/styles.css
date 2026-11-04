@@ -1,39 +1,43 @@
 :root {
   color-scheme: dark;
-  --bg: #0b0b0d;
-  --bg-mid: #111115;
-  --bg-end: #17130f;
-  --panel: #151518;
-  --panel-2: #1d1d21;
-  --inset: #101012;
-  --line: #303037;
-  --text: #f5f1e8;
-  --muted: #a9a49a;
-  --teal: #38d6c6;
-  --coral: #ff6f59;
-  --yellow: #f5c84b;
-  --green: #7bd88f;
-  --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
-  --teal-glow: rgba(56, 214, 198, 0.18);
-  --chart-bg: #101012;
-  --stage-bg: #060607;
+  --bg: #0c0d10;
+  --bg-mid: #14161c;
+  --bg-end: #1a1612;
+  --panel: rgba(18, 20, 26, 0.92);
+  --panel-2: #1c212b;
+  --inset: #0e1116;
+  --line: rgba(226, 196, 150, 0.18);
+  --text: #f6f1e8;
+  --muted: #b3a89a;
+  --teal: #e4b15a;
+  --coral: #e07a5f;
+  --yellow: #f0c36a;
+  --green: #9dcea8;
+  --shadow: 0 30px 70px rgba(0, 0, 0, 0.42);
+  --teal-glow: rgba(228, 177, 90, 0.16);
+  --chart-bg: #0e1116;
+  --stage-bg: #07080b;
+  --serif: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+  --sans: "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
 }
 
 [data-theme="light"] {
   color-scheme: light;
-  --bg: #f3f2ec;
-  --bg-mid: #ebe6dc;
-  --bg-end: #e4ddd3;
-  --panel: #ffffff;
-  --panel-2: #f6f3ec;
-  --inset: #ece8df;
-  --line: #d5d0c4;
-  --text: #17130f;
-  --muted: #5f5a52;
-  --shadow: 0 18px 40px rgba(23, 19, 15, 0.12);
-  --teal-glow: rgba(15, 118, 110, 0.14);
-  --chart-bg: #eceae4;
-  --stage-bg: #d8d3c8;
+  --bg: #f4eee4;
+  --bg-mid: #efe4d4;
+  --bg-end: #e7d8c4;
+  --panel: rgba(255, 250, 243, 0.94);
+  --panel-2: #f6efe4;
+  --inset: #efe6d8;
+  --line: rgba(72, 48, 24, 0.16);
+  --text: #1d1712;
+  --muted: #6d6256;
+  --teal: #8a5a1e;
+  --shadow: 0 22px 50px rgba(48, 32, 16, 0.12);
+  --teal-glow: rgba(138, 90, 30, 0.12);
+  --chart-bg: #f6efe4;
+  --stage-bg: #d9cbb8;
 }
 
 * {
@@ -52,8 +56,8 @@ body {
     linear-gradient(135deg, var(--bg) 0%, var(--bg-mid) 52%, var(--bg-end) 100%);
   background-color: var(--bg);
   color: var(--text);
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--sans);
+  letter-spacing: 0.01em;
 }
 
 button,
@@ -110,11 +114,15 @@ button svg {
 }
 
 .brand-mark {
-  width: 0.72rem;
-  height: 2.1rem;
-  border-radius: 999px;
-  background: linear-gradient(180deg, var(--teal), var(--coral));
-  box-shadow: 0 0 18px rgba(56, 214, 198, 0.35);
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: 0.55rem;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.28), transparent 42%),
+    conic-gradient(from 210deg, #f0c36a, #8a5a1e 40%, #1c212b 41%, #e07a5f 78%, #f0c36a);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 244, 220, 0.35),
+    0 8px 18px rgba(0, 0, 0, 0.28);
 }
 
 .eyebrow {
@@ -133,8 +141,10 @@ p {
 }
 
 h1 {
-  font-size: clamp(1.15rem, 1.8vw, 1.55rem);
-  line-height: 1.1;
+  font-family: var(--serif);
+  font-size: clamp(1.55rem, 2vw, 2.05rem);
+  font-weight: 600;
+  line-height: 0.95;
   letter-spacing: -0.03em;
 }
 
@@ -816,9 +826,14 @@ input[type="color"] {
     flex-direction: column;
   }
 
-  .status-pill,
   .topbar-meta {
     width: 100%;
+    justify-content: flex-start;
+  }
+
+  .status-pill {
+    width: auto;
+    min-width: 0;
   }
 
   .button-row,
@@ -831,4 +846,132 @@ input[type="color"] {
   button {
     transition: none;
   }
+}
+
+body {
+  background:
+    radial-gradient(circle at 0% 0%, var(--teal-glow), transparent 28rem),
+    radial-gradient(circle at 100% 100%, rgba(224, 122, 95, 0.08), transparent 24rem),
+    linear-gradient(165deg, var(--bg) 0%, var(--bg-mid) 48%, var(--bg-end) 100%);
+}
+
+button,
+input,
+select,
+summary {
+  font-family: var(--sans);
+}
+
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+}
+
+.stage-panel,
+.control-panel {
+  border-radius: 22px;
+  backdrop-filter: blur(16px);
+}
+
+.video-stage {
+  background:
+    radial-gradient(circle at 50% 40%, rgba(228, 177, 90, 0.08), transparent 18rem),
+    linear-gradient(180deg, #10131a, var(--stage-bg));
+  box-shadow: inset 0 0 0 1px rgba(255, 236, 210, 0.06);
+}
+
+.video-stage::after {
+  content: "";
+  position: absolute;
+  inset: 0.85rem;
+  z-index: 3;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--teal), var(--teal)) left top / 1.4rem 1px no-repeat,
+    linear-gradient(var(--teal), var(--teal)) left top / 1px 1.4rem no-repeat,
+    linear-gradient(var(--teal), var(--teal)) right top / 1.4rem 1px no-repeat,
+    linear-gradient(var(--teal), var(--teal)) right top / 1px 1.4rem no-repeat,
+    linear-gradient(var(--teal), var(--teal)) left bottom / 1.4rem 1px no-repeat,
+    linear-gradient(var(--teal), var(--teal)) left bottom / 1px 1.4rem no-repeat,
+    linear-gradient(var(--teal), var(--teal)) right bottom / 1.4rem 1px no-repeat,
+    linear-gradient(var(--teal), var(--teal)) right bottom / 1px 1.4rem no-repeat;
+}
+
+.stage-hud {
+  inset: 1.15rem;
+}
+
+.empty-state {
+  background:
+    linear-gradient(180deg, rgba(7, 8, 11, 0.2), rgba(7, 8, 11, 0.72));
+}
+
+.empty-kicker {
+  letter-spacing: 0.16em;
+}
+
+.primary-button {
+  color: #1b140c;
+  background: linear-gradient(180deg, #f0c36a, #d39a3a);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.primary-button:hover:not(:disabled) {
+  background: linear-gradient(180deg, #f6d48a, #e2b15a);
+}
+
+.ghost-button,
+.mode-switch button,
+.class-chip-toggle {
+  border-radius: 10px;
+}
+
+.ghost-button[aria-pressed="true"],
+.effect-grid button[aria-pressed="true"],
+.app-guide button[aria-pressed="true"] {
+  background: rgba(228, 177, 90, 0.16);
+  box-shadow: inset 0 0 0 1px rgba(228, 177, 90, 0.45);
+}
+
+.stat strong,
+output,
+.confidence,
+.hud-chip {
+  font-family: var(--mono);
+}
+
+.stat {
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent),
+    var(--inset);
+}
+
+.stat strong {
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.panel-group summary {
+  letter-spacing: 0.16em;
+}
+
+.guide-card,
+#detectionList li,
+#historyList li,
+.filmstrip-card {
+  border-radius: 14px;
+}
+
+select,
+input[type="search"],
+input[type="text"],
+input[type="file"],
+input[type="color"] {
+  border-radius: 12px;
+  background: var(--inset);
+}
+
+.booth-countdown {
+  font-family: var(--serif);
 }
