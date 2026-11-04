@@ -21,8 +21,8 @@
     <meta name="twitter:card" content="summary" />
     <title>Realtime Detection Console</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-    <link rel="stylesheet" href="static/styles.css?v=2.1.0" />
-    <script type="module" src="static/app.js?v=2.1.0"></script>
+    <link rel="stylesheet" href="static/styles.css?v=2.4.0" />
+    <script type="module" src="static/app.js?v=2.4.0"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -47,8 +47,10 @@
         <div class="stage-panel">
           <div class="video-stage" id="videoStage">
             <video id="video" autoplay playsinline muted></video>
+            <canvas id="studioCanvas" class="hidden"></canvas>
             <canvas id="heatmap"></canvas>
             <canvas id="overlay"></canvas>
+            <div class="booth-countdown hidden" id="boothCountdown" aria-live="assertive"></div>
             <div class="stage-hud" aria-hidden="true">
               <span class="hud-chip demo hidden" id="demoBadge">Demo feed</span>
               <span class="hud-chip" id="hudState">Idle</span>
@@ -161,6 +163,94 @@
               <p class="field-note">Empty selection means all classes. Chips toggle the filter.</p>
             </div>
             <div class="class-chips" id="classChips"></div>
+          </details>
+
+          <details class="panel-group" open>
+            <summary>Studio</summary>
+            <p class="field-note" id="studioNote">Disappear removes detected people. Step out once and capture a background plate for a clean vanish.</p>
+            <div class="effect-grid" role="group" aria-label="Studio effects">
+              <button type="button" class="ghost-button" data-effect="none" aria-pressed="true">Off</button>
+              <button type="button" class="ghost-button" data-effect="disappear">Disappear</button>
+              <button type="button" class="ghost-button" data-effect="portrait">Portrait blur</button>
+              <button type="button" class="ghost-button" data-effect="replace">Replace background</button>
+              <button type="button" class="ghost-button" data-effect="pixelate">Pixelate</button>
+              <button type="button" class="ghost-button" data-effect="spotlight">Spotlight</button>
+              <button type="button" class="ghost-button" data-effect="outline">Outline</button>
+            </div>
+            <div class="control-group">
+              <label for="vanishMode">Vanish targets</label>
+              <select id="vanishMode">
+                <option value="people">People</option>
+                <option value="selected">Class filter</option>
+                <option value="all">Every detection</option>
+              </select>
+            </div>
+            <div class="control-group">
+              <label for="padRange">Edge padding</label>
+              <div class="range-row">
+                <input id="padRange" type="range" min="0" max="0.45" step="0.01" value="0.18" />
+                <output id="padValue">18%</output>
+              </div>
+            </div>
+            <div class="control-group">
+              <label for="backgroundColor">Background color</label>
+              <input id="backgroundColor" type="color" value="#1f8a70" />
+            </div>
+            <div class="control-group">
+              <label for="gradeSelect">Color grade</label>
+              <select id="gradeSelect">
+                <option value="none">Natural</option>
+                <option value="warm">Warm</option>
+                <option value="noir">Noir</option>
+                <option value="vivid">Vivid</option>
+                <option value="dawn">Dawn</option>
+              </select>
+            </div>
+            <label class="toggle-row" for="mirrorToggle">
+              <input id="mirrorToggle" type="checkbox" />
+              <span>Mirror the outgoing picture (`M`)</span>
+            </label>
+            <label class="toggle-row" for="autoFrameToggle">
+              <input id="autoFrameToggle" type="checkbox" />
+              <span>Auto frame on people</span>
+            </label>
+            <div class="control-group">
+              <label for="nameplateInput">Name plate</label>
+              <input id="nameplateInput" type="text" maxlength="42" placeholder="Name on the outgoing picture" autocomplete="off" />
+            </div>
+            <label class="toggle-row" for="burnHudToggle">
+              <input id="burnHudToggle" type="checkbox" />
+              <span>Burn detection count into the output</span>
+            </label>
+            <div class="button-row">
+              <button class="ghost-button" id="capturePlateButton" type="button">Capture plate</button>
+              <button class="ghost-button" id="photoBoothButton" type="button">Photo booth</button>
+            </div>
+            <div class="button-row">
+              <button class="ghost-button" id="cleanFeedButton" type="button">Clean feed</button>
+              <button class="ghost-button" id="recordButton" type="button">Record clip</button>
+            </div>
+            <label class="toggle-row" for="virtualCamToggle">
+              <input id="virtualCamToggle" type="checkbox" />
+              <span>Send to virtual camera</span>
+            </label>
+            <p class="field-note" id="virtualCamStatus">Off. Local server required for Zoom, Photo Booth, FaceTime, Meet, Teams, Discord, OBS, and QuickTime.</p>
+            <div class="app-guide" role="group" aria-label="Video apps">
+              <button type="button" class="ghost-button" data-video-app="zoom" aria-pressed="true">Zoom</button>
+              <button type="button" class="ghost-button" data-video-app="meet">Meet</button>
+              <button type="button" class="ghost-button" data-video-app="teams">Teams</button>
+              <button type="button" class="ghost-button" data-video-app="photobooth">Photo Booth</button>
+              <button type="button" class="ghost-button" data-video-app="facetime">FaceTime</button>
+              <button type="button" class="ghost-button" data-video-app="discord">Discord</button>
+              <button type="button" class="ghost-button" data-video-app="obs">OBS</button>
+              <button type="button" class="ghost-button" data-video-app="quicktime">QuickTime</button>
+              <button type="button" class="ghost-button" data-video-app="slack">Slack</button>
+              <button type="button" class="ghost-button" data-video-app="webex">Webex</button>
+              <button type="button" class="ghost-button" data-video-app="twitch">Twitch</button>
+            </div>
+            <div class="guide-card" id="videoAppGuide"></div>
+            <img id="boothPreview" class="booth-preview hidden" alt="Photo booth strip" />
+            <button class="ghost-button" id="downloadBooth" type="button" disabled>Download strip</button>
           </details>
 
           <details class="panel-group">

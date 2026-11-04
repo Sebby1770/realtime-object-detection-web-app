@@ -1,6 +1,6 @@
 # Real-Time Object Detection Web App
 
-Dual-runtime vision console: a live webcam (or demo) feed, boxes on a canvas, class counts, ROI alerts, privacy cloak, snapshots, and session history.
+Dual-runtime vision console: a live webcam (or demo) feed, boxes on a canvas, class counts, ROI alerts, privacy cloak, a studio that can make you disappear, photo booth strips, and a bridge into Zoom, Photo Booth, FaceTime, Meet, Teams, Discord, OBS, and QuickTime.
 
 - **Local:** FastAPI + WebSocket JPEGs + YOLOv8n (OpenCV decode).
 - **GitHub Pages / no backend:** TensorFlow.js coco-ssd (`lite_mobilenet_v2`) in the browser. Frames never leave the tab.
@@ -21,6 +21,9 @@ On Pages, click **Desk**, **Kitchen**, or **Street** if you do not want to grant
 - Demo-feed fallback with a visible **Demo feed** badge (8s camera timeout).
 - Keyboard: `Space` pause, `S` snapshot, `Esc` cancel ROI draw.
 - Light theme that actually restyles the page background.
+- Studio effects on the outgoing picture: Disappear, portrait blur, background replace, pixelate, spotlight, and outline. Color grades (warm, noir, vivid, dawn) tint that same picture. Mirror (`M`) flips it for a call, auto frame zooms toward people, and a name plate is burned in as readable text. `D` toggles disappear, `B` captures a background plate, `P` runs the photo booth.
+- Photo booth: countdown, four-shot strip, PNG download.
+- Clean-feed window for screen share, WebM recording, and a local virtual-camera bridge (`OBS Virtual Camera` via `pyvirtualcam`) plus an MJPEG URL for OBS.
 
 ## Stack
 
@@ -41,6 +44,22 @@ uvicorn app.main:app --reload
 ```
 
 Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+### Use it as your camera
+
+Disappear and the other studio effects are burned into the picture those apps see.
+
+1. Start the camera, choose **Disappear** (or Portrait blur / Replace background), step out, and press **Capture plate**.
+2. Press **Clean feed** and share that window in Zoom, Meet, Teams, or Discord.
+3. For Photo Booth, FaceTime, QuickTime, and the camera picker in Zoom, install [OBS](https://obsproject.com/) once, then:
+
+```bash
+pip install -r requirements-virtualcam.txt
+```
+
+Turn on **Send to virtual camera** and choose **OBS Virtual Camera** in the other app. The Studio panel lists the exact menu for Zoom, Google Meet, Teams, Photo Booth, FaceTime, Discord, OBS, QuickTime, Slack, Webex, and Twitch.
+
+OBS can also open `http://127.0.0.1:8000/api/studio.mjpg` as a media source while this server is running. GitHub Pages still runs detection on-device, including Disappear and the photo booth; the virtual camera and MJPEG URL exist only on the local server.
 
 The first inference may take a moment while Ultralytics downloads the YOLOv8 nano weights. Do not commit `*.pt` files.
 

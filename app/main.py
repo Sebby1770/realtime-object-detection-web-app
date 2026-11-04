@@ -1,21 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect, status
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.detector import clamp_confidence, detect_objects, model_info
 from app.stats import SessionStats
 from app.tracker import SimpleTracker
+from app.virtualcam import StudioBridge
 
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.4.0"
+STUDIO_FRAME_BYTES = int(os.getenv("STUDIO_FRAME_BYTES", str(2 * 1024 * 1024)))
+studio_bridge = StudioBridge()
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 DEFAULT_ALLOWED_ORIGINS = {
@@ -129,6 +133,39 @@ async def detect_batch(
 @app.get("/api/stats")
 async def session_stats() -> dict[str, str | int | float | list[str]]:
     return _SESSION_STATS.as_dict()
+
+
+@app.get("/api/virtualcam/status")
+async def virtualcam_status() -> dict[str, object]:
+    return studio_bridge.status()
+
+
+@app.post("/api/virtualcam/frame")
+async def virtualcam_frame(request: Request) -> dict[str, object]:
+    payload = await request.body()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Empty frame.")
+    if len(payload) > STUDIO_FRAME_BYTES:
+        raise HTTPException(status_code=400, detail="Frame exceeds the 2MB studio limit.")
+    if not payload.startswith(b"\xff\xd8"):
+        raise HTTPException(status_code=400, detail="Expected a JPEG frame.")
+    studio_bridge.push(payload)
+    return studio_bridge.status()
+
+
+@app.get("/api/studio.mjpg")
+async def studio_mjpeg() -> StreamingResponse:
+    return StreamingResponse(studio_mjpeg_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+
+async def studio_mjpeg_frames():
+    last: bytes | None = None
+    while True:
+        frame = studio_bridge.snapshot()
+        if frame and frame is not last:
+            last = frame
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
+        await asyncio.sleep(0.05)
 
 
 _SESSION_STATS = SessionStats()

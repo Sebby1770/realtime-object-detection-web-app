@@ -61,7 +61,29 @@ def test_health_reports_version() -> None:
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-    assert response.json()["version"] == "2.1.0"
+    assert response.json()["version"] == "2.4.0"
+
+
+def test_virtualcam_bridge_accepts_jpeg_frames() -> None:
+    main.studio_bridge.reset()
+    client = TestClient(main.app)
+    status_response = client.get("/api/virtualcam/status")
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["mjpeg_path"] == "/api/studio.mjpg"
+    assert body["frames"] == 0
+
+    posted = client.post(
+        "/api/virtualcam/frame",
+        content=b"\xff\xd8\xff\xd9",
+        headers={"content-type": "image/jpeg"},
+    )
+    assert posted.status_code == 200
+    assert posted.json()["frames"] == 1
+    assert posted.json()["receiving"] is True
+
+    rejected = client.post("/api/virtualcam/frame", content=b"not-a-jpeg")
+    assert rejected.status_code == 400
 
 
 def test_run_detection_filters_by_class(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.4.0 — 2026-11-04
+
+### Added
+- **Mirror** flips the outgoing studio picture left to right. Toggle it in the panel or press `M`.
+- **Auto frame** zooms that picture toward detected people and keeps the same shape.
+- **Name plate** burns a short label into the picture after the color grade, so the letters stay readable.
+
+### Changed
+- Application version **2.4.0**
+
+## 2.3.0 — 2026-11-04
+
+### Added
+- **Color grades** on the studio picture: Warm, Noir, Vivid, and Dawn. The grade is burned in before the detection-count label, and it is remembered with the other studio settings.
+- Setup cards for Slack, Webex, and Twitch.
+
+### Changed
+- Application version **2.3.0**
+
+## 2.2.0 — 2026-11-04
+
+### Added
+- **Studio effects** burned into the outgoing picture: Disappear, portrait blur, background replace, pixelate, spotlight, and outline
+- Background plate capture so Disappear can put the room back where a person was, with a blur fallback before the plate exists
+- **Photo booth**: countdown, four-shot strip, PNG download (`P`)
+- **Clean feed** window for screen share, WebM clip recording, and a detection-count burn-in
+- **Virtual camera bridge** for Zoom, Photo Booth, FaceTime, Google Meet, Teams, Discord, OBS, and QuickTime (`POST /api/virtualcam/frame`, optional `pyvirtualcam` / OBS Virtual Camera, `GET /api/studio.mjpg`)
+- Per-app setup card in the Studio panel
+- Keyboard: `D` disappear, `B` capture plate
+
+### Changed
+- Application version **2.2.0**
+
 ## 2.1.0 — 2026-08-22
 
 ### Added

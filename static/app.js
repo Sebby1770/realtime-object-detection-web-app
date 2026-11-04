@@ -28,8 +28,17 @@ import {
   resumeAudio,
   sonifyDetections,
 } from "./audio.js";
+import {
+  STUDIO_MAX_WIDTH,
+  buildPhotoStrip,
+  cleanNameplate,
+  compositeFrame,
+  effectTargets,
+  learnPlate,
+  videoAppGuide,
+} from "./studio.js";
 
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "2.4.0";
 const ROI_COOLDOWN_MS = 1200;
 const CAMERA_TIMEOUT_MS = 8000;
 const MAX_ROIS = 3;
@@ -114,6 +123,27 @@ const elements = {
   modelOverlayStatus: document.querySelector("#modelOverlayStatus"),
   fullscreenButton: document.querySelector("#fullscreenButton"),
   syntheticDemoButton: document.querySelector("#syntheticDemoButton"),
+  studioCanvas: document.querySelector("#studioCanvas"),
+  studioNote: document.querySelector("#studioNote"),
+  vanishMode: document.querySelector("#vanishMode"),
+  padRange: document.querySelector("#padRange"),
+  padValue: document.querySelector("#padValue"),
+  backgroundColor: document.querySelector("#backgroundColor"),
+  gradeSelect: document.querySelector("#gradeSelect"),
+  mirrorToggle: document.querySelector("#mirrorToggle"),
+  autoFrameToggle: document.querySelector("#autoFrameToggle"),
+  nameplateInput: document.querySelector("#nameplateInput"),
+  burnHudToggle: document.querySelector("#burnHudToggle"),
+  capturePlateButton: document.querySelector("#capturePlateButton"),
+  photoBoothButton: document.querySelector("#photoBoothButton"),
+  cleanFeedButton: document.querySelector("#cleanFeedButton"),
+  recordButton: document.querySelector("#recordButton"),
+  virtualCamToggle: document.querySelector("#virtualCamToggle"),
+  virtualCamStatus: document.querySelector("#virtualCamStatus"),
+  videoAppGuide: document.querySelector("#videoAppGuide"),
+  boothCountdown: document.querySelector("#boothCountdown"),
+  boothPreview: document.querySelector("#boothPreview"),
+  downloadBooth: document.querySelector("#downloadBooth"),
 };
 
 const SAMPLE_SCENES = {
@@ -200,6 +230,29 @@ const state = {
     classes_seen: [],
     roi_alerts: 0,
   },
+  studioEffect: "none",
+  vanishMode: "people",
+  studioPad: 0.18,
+  backgroundColor: "#1f8a70",
+  grade: "none",
+  mirror: false,
+  autoFrame: false,
+  nameplate: "",
+  burnHud: false,
+  plate: null,
+  capturePlate: false,
+  virtualCam: false,
+  virtualCamSentAt: 0,
+  virtualCamBusy: false,
+  cleanFeed: false,
+  cleanFeedSentAt: 0,
+  studioChannel: null,
+  recorder: null,
+  recordChunks: [],
+  boothRunning: false,
+  boothStrip: null,
+  videoApp: "zoom",
+  emptyPlateFrames: 0,
 };
 
 let serverRuntime = null;
@@ -1196,6 +1249,15 @@ function saveSettings() {
       privacyBlur: state.privacyBlur,
       ghostOpacity: state.ghostOpacity,
       cornerBoxes: state.cornerBoxes,
+      studioEffect: state.studioEffect,
+      vanishMode: state.vanishMode,
+      studioPad: state.studioPad,
+      backgroundColor: state.backgroundColor,
+      grade: state.grade,
+      mirror: state.mirror,
+      autoFrame: state.autoFrame,
+      nameplate: state.nameplate,
+      burnHud: state.burnHud,
     }),
   );
 }
@@ -1267,6 +1329,43 @@ function loadSettings() {
       state.cornerBoxes = saved.cornerBoxes;
       elements.cornerBoxToggle.checked = saved.cornerBoxes;
     }
+    if (saved.studioEffect) {
+      state.studioEffect = saved.studioEffect;
+    }
+    if (saved.vanishMode) {
+      state.vanishMode = saved.vanishMode;
+      elements.vanishMode.value = saved.vanishMode;
+    }
+    if (saved.studioPad != null) {
+      state.studioPad = Number(saved.studioPad);
+      elements.padRange.value = String(state.studioPad);
+      elements.padValue.textContent = `${Math.round(state.studioPad * 100)}%`;
+    }
+    if (saved.backgroundColor) {
+      state.backgroundColor = saved.backgroundColor;
+      elements.backgroundColor.value = saved.backgroundColor;
+    }
+    if (saved.grade) {
+      state.grade = saved.grade;
+      elements.gradeSelect.value = saved.grade;
+    }
+    if (saved.mirror != null) {
+      state.mirror = saved.mirror === true;
+      elements.mirrorToggle.checked = state.mirror;
+    }
+    if (saved.autoFrame != null) {
+      state.autoFrame = saved.autoFrame === true;
+      elements.autoFrameToggle.checked = state.autoFrame;
+    }
+    if (typeof saved.nameplate === "string") {
+      state.nameplate = cleanNameplate(saved.nameplate);
+      elements.nameplateInput.value = state.nameplate;
+    }
+    if (saved.burnHud != null) {
+      state.burnHud = saved.burnHud;
+      elements.burnHudToggle.checked = saved.burnHud;
+    }
+    markStudioEffect(state.studioEffect);
   } catch {
     // ignore invalid saved settings
   }
@@ -1422,7 +1521,272 @@ function overlayOptions() {
   };
 }
 
+function studioOutputWanted() {
+  return (
+    state.studioEffect !== "none" ||
+    state.grade !== "none" ||
+    state.mirror ||
+    state.autoFrame ||
+    cleanNameplate(state.nameplate) !== "" ||
+    state.virtualCam ||
+    state.cleanFeed ||
+    state.recorder ||
+    state.boothRunning
+  );
+}
+
+function ensurePlate() {
+  if (!state.plate) {
+    state.plate = { canvas: document.createElement("canvas"), seeded: false };
+  }
+  return state.plate;
+}
+
+function renderStudio() {
+  const canvas = elements.studioCanvas;
+  const source = currentSource();
+  const show = Boolean(source) && studioOutputWanted() && (state.running || state.stillMode || state.demoMode);
+  canvas.classList.toggle("hidden", !show);
+  elements.videoStage.classList.toggle("studio-live", show);
+  if (!show) {
+    return null;
+  }
+  const size = sourceSize(source);
+  const width = Math.min(STUDIO_MAX_WIDTH, size.width || 640);
+  const height = Math.max(1, Math.round(width * ((size.height || 360) / (size.width || 640))));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  const plate = ensurePlate();
+  const frameSize = state.frameSize.width ? state.frameSize : { width, height };
+  const boxes = effectTargets(state.detections, frameSize, { width, height }, {
+    pad: state.studioPad,
+    vanishMode: state.vanishMode,
+    selectedClasses: state.selectedClasses,
+  });
+  state.emptyPlateFrames = boxes.length === 0 ? state.emptyPlateFrames + 1 : 0;
+  const autoSeed = !plate.seeded && state.emptyPlateFrames >= 8;
+  learnPlate(plate, source, width, height, boxes, state.capturePlate || autoSeed);
+  state.capturePlate = false;
+  const hudText = state.burnHud ? `${state.detections.length} detected` : "";
+  const rendered = compositeFrame(canvas.getContext("2d"), source, width, height, {
+    effect: state.studioEffect,
+    detections: state.detections,
+    frameSize,
+    plate,
+    pad: state.studioPad,
+    vanishMode: state.vanishMode,
+    selectedClasses: state.selectedClasses,
+    backgroundColor: state.backgroundColor,
+    grade: state.grade,
+    mirror: state.mirror,
+    autoFrame: state.autoFrame,
+    nameplate: state.nameplate,
+    burnHud: state.burnHud,
+    hudText,
+  });
+  if (state.studioEffect === "disappear") {
+    elements.studioNote.textContent = rendered.plateReady
+      ? "Disappear is using the captured background. Move, and the room stays behind you."
+      : "Blur vanish is on. Step out of frame, or press Capture plate, for a solid background.";
+  }
+  publishStudio(canvas);
+  return canvas;
+}
+
+function publishStudio(canvas) {
+  const now = performance.now();
+  if (state.cleanFeed && state.studioChannel && now - state.cleanFeedSentAt > 70) {
+    state.cleanFeedSentAt = now;
+    canvas.toBlob((blob) => {
+      if (blob && state.studioChannel) {
+        state.studioChannel.postMessage(blob);
+      }
+    }, "image/jpeg", 0.72);
+  }
+  if (!state.virtualCam || !state.serverAvailable || state.virtualCamBusy || now - state.virtualCamSentAt < 90) {
+    return;
+  }
+  state.virtualCamSentAt = now;
+  state.virtualCamBusy = true;
+  canvas.toBlob(async (blob) => {
+    if (!blob) {
+      state.virtualCamBusy = false;
+      return;
+    }
+    try {
+      const response = await fetch(apiUrl("/api/virtualcam/frame"), {
+        method: "POST",
+        headers: { "content-type": "image/jpeg" },
+        body: blob,
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "Bridge rejected the frame");
+      }
+      elements.virtualCamStatus.textContent = payload.available
+        ? `OBS Virtual Camera live · ${payload.frames} frames. Pick it in Zoom, Photo Booth, FaceTime, Meet, Teams, Discord, or QuickTime.`
+        : `Bridge has ${payload.frames} frames. Install OBS + pyvirtualcam to appear as a camera. MJPEG: ${payload.mjpeg_path}`;
+    } catch (error) {
+      elements.virtualCamStatus.textContent = error.message || "Virtual camera bridge unreachable";
+    } finally {
+      state.virtualCamBusy = false;
+    }
+  }, "image/jpeg", 0.8);
+}
+
+function markStudioEffect(effect) {
+  document.querySelectorAll("[data-effect]").forEach((button) => {
+    button.setAttribute("aria-pressed", button.dataset.effect === effect ? "true" : "false");
+  });
+}
+
+function setStudioEffect(effect) {
+  state.studioEffect = effect;
+  markStudioEffect(effect);
+  if (effect !== "disappear") {
+    elements.studioNote.textContent =
+      "Effects are burned into the clean feed, the recording, and the virtual camera. D toggles disappear.";
+  }
+  saveSettings();
+}
+
+function renderVideoAppGuide(id = state.videoApp) {
+  state.videoApp = id;
+  document.querySelectorAll("[data-video-app]").forEach((button) => {
+    button.setAttribute("aria-pressed", button.dataset.videoApp === id ? "true" : "false");
+  });
+  const guide = videoAppGuide(id);
+  elements.videoAppGuide.replaceChildren();
+  const title = document.createElement("strong");
+  title.textContent = guide.name;
+  const camera = document.createElement("p");
+  camera.textContent = `Camera: ${guide.camera}`;
+  const windowShare = document.createElement("p");
+  windowShare.textContent = `Window: ${guide.window}`;
+  const list = document.createElement("ol");
+  for (const step of guide.setup) {
+    const item = document.createElement("li");
+    item.textContent = step;
+    list.append(item);
+  }
+  elements.videoAppGuide.append(title, camera, windowShare, list);
+}
+
+function cloneFrame(source) {
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width || source.videoWidth || 640;
+  canvas.height = source.height || source.videoHeight || 360;
+  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+async function startPhotoBooth() {
+  if (state.boothRunning) {
+    return;
+  }
+  const source = currentSource();
+  if (!source) {
+    elements.studioNote.textContent = "Start the camera or a sample scene before the photo booth.";
+    return;
+  }
+  state.boothRunning = true;
+  elements.photoBoothButton.disabled = true;
+  const ticks = reducedMotion() ? ["1"] : ["3", "2", "1"];
+  for (const tick of ticks) {
+    elements.boothCountdown.textContent = tick;
+    elements.boothCountdown.classList.remove("hidden");
+    await wait(reducedMotion() ? 160 : 700);
+  }
+  elements.boothCountdown.classList.add("hidden");
+  const shots = [];
+  for (let index = 0; index < 4; index += 1) {
+    const live = elements.studioCanvas.classList.contains("hidden") ? source : elements.studioCanvas;
+    shots.push(cloneFrame(live));
+    elements.boothCountdown.textContent = String(index + 1);
+    elements.boothCountdown.classList.remove("hidden");
+    await wait(reducedMotion() ? 90 : 280);
+    elements.boothCountdown.classList.add("hidden");
+    if (index < 3) {
+      await wait(reducedMotion() ? 80 : 320);
+    }
+  }
+  state.boothStrip = buildPhotoStrip(shots, {
+    caption: `DETECTION BOOTH · ${new Date().toLocaleString()}`,
+  });
+  elements.boothPreview.src = state.boothStrip.toDataURL("image/png");
+  elements.boothPreview.classList.remove("hidden");
+  elements.downloadBooth.disabled = false;
+  state.boothRunning = false;
+  elements.photoBoothButton.disabled = false;
+}
+
+function downloadBoothStrip() {
+  if (!state.boothStrip) {
+    return;
+  }
+  const link = document.createElement("a");
+  link.download = `photo-booth-${Date.now()}.png`;
+  link.href = state.boothStrip.toDataURL("image/png");
+  link.click();
+}
+
+function openCleanFeed() {
+  if (!state.studioChannel && "BroadcastChannel" in window) {
+    state.studioChannel = new BroadcastChannel("detection-studio");
+  }
+  state.cleanFeed = true;
+  const popup = window.open("static/studio.html", "detection-clean-feed", "width=960,height=540");
+  if (!popup) {
+    elements.virtualCamStatus.textContent = "Allow pop-ups to open the clean feed window.";
+  }
+}
+
+function toggleRecording() {
+  if (state.recorder) {
+    state.recorder.stop();
+    return;
+  }
+  const canvas = elements.studioCanvas;
+  if (!canvas.captureStream) {
+    elements.studioNote.textContent = "This browser cannot record a canvas stream.";
+    return;
+  }
+  state.cleanFeed = state.cleanFeed || state.studioEffect !== "none";
+  const stream = canvas.captureStream(30);
+  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
+    ? "video/webm;codecs=vp9"
+    : "video/webm";
+  const recorder = new MediaRecorder(stream, { mimeType });
+  state.recordChunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data?.size) {
+      state.recordChunks.push(event.data);
+    }
+  };
+  recorder.onstop = () => {
+    const blob = new Blob(state.recordChunks, { type: "video/webm" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `detection-studio-${Date.now()}.webm`;
+    link.click();
+    state.recorder = null;
+    elements.recordButton.textContent = "Record clip";
+  };
+  recorder.start();
+  state.recorder = recorder;
+  elements.recordButton.textContent = "Stop recording";
+}
+
 function renderStage() {
+  renderStudio();
   const drawn = drawOverlay({
     overlay: elements.overlay,
     stage: elements.videoStage,
@@ -1635,7 +1999,84 @@ window.addEventListener("keydown", (event) => {
   } else if (event.key === "f" || event.key === "F") {
     event.preventDefault();
     toggleFullscreen().catch(() => {});
+  } else if (event.key === "d" || event.key === "D") {
+    event.preventDefault();
+    setStudioEffect(state.studioEffect === "disappear" ? "none" : "disappear");
+  } else if (event.key === "b" || event.key === "B") {
+    event.preventDefault();
+    state.capturePlate = true;
+    elements.studioNote.textContent = "Background plate captured from this frame.";
+  } else if (event.key === "p" || event.key === "P") {
+    event.preventDefault();
+    startPhotoBooth().catch(() => {});
+  } else if (event.key === "m" || event.key === "M") {
+    event.preventDefault();
+    state.mirror = !state.mirror;
+    elements.mirrorToggle.checked = state.mirror;
+    elements.studioNote.textContent = state.mirror
+      ? "Mirror is on. The outgoing picture is flipped left to right."
+      : "Mirror is off.";
+    saveSettings();
   }
+});
+
+document.querySelectorAll("[data-effect]").forEach((button) => {
+  button.addEventListener("click", () => setStudioEffect(button.dataset.effect));
+});
+document.querySelectorAll("[data-video-app]").forEach((button) => {
+  button.addEventListener("click", () => renderVideoAppGuide(button.dataset.videoApp));
+});
+elements.vanishMode.addEventListener("change", (event) => {
+  state.vanishMode = event.target.value;
+  saveSettings();
+});
+elements.padRange.addEventListener("input", (event) => {
+  state.studioPad = Number(event.target.value);
+  elements.padValue.textContent = `${Math.round(state.studioPad * 100)}%`;
+  saveSettings();
+});
+elements.backgroundColor.addEventListener("input", (event) => {
+  state.backgroundColor = event.target.value;
+  saveSettings();
+});
+elements.gradeSelect.addEventListener("change", (event) => {
+  state.grade = event.target.value;
+  saveSettings();
+});
+elements.mirrorToggle.addEventListener("change", (event) => {
+  state.mirror = event.target.checked;
+  saveSettings();
+});
+elements.autoFrameToggle.addEventListener("change", (event) => {
+  state.autoFrame = event.target.checked;
+  elements.studioNote.textContent = state.autoFrame
+    ? "Auto frame zooms the outgoing picture toward people."
+    : "Auto frame is off.";
+  saveSettings();
+});
+elements.nameplateInput.addEventListener("input", (event) => {
+  state.nameplate = cleanNameplate(event.target.value);
+  saveSettings();
+});
+elements.burnHudToggle.addEventListener("change", (event) => {
+  state.burnHud = event.target.checked;
+  saveSettings();
+});
+elements.capturePlateButton.addEventListener("click", () => {
+  state.capturePlate = true;
+  elements.studioNote.textContent = "Hold still out of frame if you can. The next studio frame becomes the background.";
+});
+elements.photoBoothButton.addEventListener("click", () => {
+  startPhotoBooth().catch(() => {});
+});
+elements.cleanFeedButton.addEventListener("click", openCleanFeed);
+elements.recordButton.addEventListener("click", toggleRecording);
+elements.downloadBooth.addEventListener("click", downloadBoothStrip);
+elements.virtualCamToggle.addEventListener("change", (event) => {
+  state.virtualCam = event.target.checked;
+  elements.virtualCamStatus.textContent = state.virtualCam
+    ? "Sending the studio picture to the local bridge…"
+    : "Virtual camera off.";
 });
 
 window.addEventListener("pointerdown", () => {
@@ -1647,6 +2088,8 @@ window.addEventListener("beforeunload", stopCamera);
 async function boot() {
   loadTheme();
   loadSettings();
+  renderVideoAppGuide(state.videoApp);
+  markStudioEffect(state.studioEffect);
   state.serverAvailable = await probeHealth();
   await setMode(state.serverAvailable ? "server" : "browser");
   if (state.mode === "browser") {

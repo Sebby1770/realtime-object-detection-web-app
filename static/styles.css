@@ -215,6 +215,7 @@ h1 {
 #video,
 .demo-feed,
 .still-frame,
+#studioCanvas,
 #overlay,
 #heatmap {
   position: absolute;
@@ -226,9 +227,20 @@ h1 {
 
 #video,
 .demo-feed,
-.still-frame {
+.still-frame,
+#studioCanvas {
   object-fit: contain;
   background: #050506;
+}
+
+#studioCanvas {
+  z-index: 0;
+}
+
+.video-stage.studio-live #video,
+.video-stage.studio-live .demo-feed,
+.video-stage.studio-live .still-frame {
+  visibility: hidden;
 }
 
 #heatmap {
@@ -673,6 +685,71 @@ output {
   font-size: 0.75rem;
   line-height: 1.4;
   margin: 0.4rem 0 0;
+}
+
+.effect-grid,
+.app-guide {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+.effect-grid button[aria-pressed="true"],
+.app-guide button[aria-pressed="true"] {
+  border-color: var(--teal);
+  color: var(--text);
+}
+
+.guide-card {
+  margin-top: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.6rem 0.7rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.guide-card strong {
+  color: var(--text);
+}
+
+.guide-card ol {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.booth-countdown {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  font-size: clamp(4rem, 12vw, 7rem);
+  font-weight: 800;
+  color: #f7f4ee;
+  text-shadow: 0 12px 40px rgba(0, 0, 0, 0.65);
+  pointer-events: none;
+}
+
+.booth-preview {
+  display: block;
+  width: 100%;
+  margin-top: 0.55rem;
+  border-radius: 12px;
+  background: #111;
+}
+
+select,
+input[type="color"] {
+  width: 100%;
+  margin-top: 0.3rem;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.4rem 0.5rem;
 }
 
 .history-time {

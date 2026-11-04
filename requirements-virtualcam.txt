@@ -1,0 +1,5 @@
+# Optional. Enables OBS Virtual Camera output for Zoom, Photo Booth,
+# FaceTime, Meet, Teams, Discord, and QuickTime.
+# Install OBS first so macOS has the camera extension, then:
+#   pip install -r requirements-virtualcam.txt
+pyvirtualcam>=0.11,<1.0
