@@ -1,380 +1,545 @@
+/**
+ * Realtime Detection 3.0 — orchestrates sources, engines, the detection loop,
+ * the monitor, the studio, and the inspector panels.
+ */
+
+import { playAlertTone, playSpatialPing, resumeAudio, sonifyDetections } from "./audio.js";
+import { colorForLabel } from "./colors.js";
+import { createCopilot } from "./copilot.js";
 import {
-  detectBrowser,
-  COCO_CLASSES,
-  getBrowserSession,
-  isBrowserModelReady,
-  loadBrowserModel,
-  recordBrowserRoiAlert,
-  resetBrowserSession,
-} from "./runtime-browser.js";
-import { createServerRuntime } from "./runtime-server.js";
+  $,
+  $$,
+  clockTime,
+  downloadBlob,
+  downloadUrl,
+  fileStamp,
+  fileToImage,
+  h,
+  isTypingTarget,
+  loadImage,
+  plural,
+  prefersReducedMotion,
+  wait,
+} from "./core/dom.js";
+import { loadSettings, loadTheme, nextTheme, saveSettings, saveTheme } from "./core/settings.js";
+import { createPersonSegmenter } from "./engines/mediapipe.js";
+import { ENGINES, FALLBACK_ENGINE_ID, SERVER_ENGINE, defaultEngineId, engineById } from "./engines/registry.js";
+import { createGlide } from "./glide.js";
 import {
-  colorForLabel,
-  drawDensityChart,
+  ROI_COLORS,
+  drawBars,
   drawHeatmap,
-  drawLatencyChart,
   drawOverlay,
-  drawProximityRadar,
+  drawRadar,
+  drawSparkline,
   letterbox,
   pointInRoi,
   pointerToNormalized,
   snapshotComposite,
   updateHeatmap,
 } from "./overlay.js";
+import { COCO_CLASSES, createBrowserSession } from "./runtime-browser.js";
+import { createServerRuntime } from "./runtime-server.js";
+import { countLabels, diaryDocument, diaryLine, diffCounts } from "./scene-diary.js";
 import {
-  playAlertTone,
-  playSpatialPing,
-  prefersReducedMotion,
-  resumeAudio,
-  sonifyDetections,
-} from "./audio.js";
-import {
+  MASK_EFFECTS,
   STUDIO_MAX_WIDTH,
+  VIDEO_APPS,
+  boxMask,
   buildPhotoStrip,
   cleanNameplate,
   compositeFrame,
   effectTargets,
   learnPlate,
+  maskTrusted,
   videoAppGuide,
 } from "./studio.js";
-import { countLabels, diaryDocument, diaryLine, diffCounts } from "./scene-diary.js";
+import { createCommandPalette, renderShortcutSheet } from "./ui/palette.js";
+import { createTabs } from "./ui/tabs.js";
+import { createToaster } from "./ui/toast.js";
 
-const APP_VERSION = "2.8.0";
-const COPILOT_KEY = "object-detection-copilot";
-const COPILOT_PROVIDERS = {
-  grok: { label: "Grok", model: "grok-4.7", vendor: "xAI" },
-  openai: { label: "ChatGPT", model: "chat-latest", vendor: "OpenAI" },
-  anthropic: { label: "Claude", model: "claude-sonnet-5", vendor: "Anthropic" },
-};
-const ROI_COOLDOWN_MS = 1200;
+const VERSION = "3.0.0";
 const CAMERA_TIMEOUT_MS = 8000;
+const ROI_COOLDOWN_MS = 1200;
 const MAX_ROIS = 3;
-const SETTINGS_KEY = "object-detection-settings";
-const THEME_KEY = "object-detection-theme";
-const PRIVACY_LABELS = new Set(["person"]);
-
-const elements = {
-  video: document.querySelector("#video"),
-  overlay: document.querySelector("#overlay"),
-  heatmap: document.querySelector("#heatmap"),
-  captureCanvas: document.querySelector("#captureCanvas"),
-  videoStage: document.querySelector("#videoStage"),
-  emptyState: document.querySelector("#emptyState"),
-  startCamera: document.querySelector("#startCamera"),
-  startCameraSide: document.querySelector("#startCameraSide"),
-  stopCamera: document.querySelector("#stopCamera"),
-  connectionStatus: document.querySelector("#connectionStatus"),
-  fpsRange: document.querySelector("#fpsRange"),
-  fpsValue: document.querySelector("#fpsValue"),
-  widthRange: document.querySelector("#widthRange"),
-  widthValue: document.querySelector("#widthValue"),
-  labelToggle: document.querySelector("#labelToggle"),
-  objectCount: document.querySelector("#objectCount"),
-  latency: document.querySelector("#latency"),
-  streamFps: document.querySelector("#streamFps"),
-  detectionList: document.querySelector("#detectionList"),
-  lastUpdated: document.querySelector("#lastUpdated"),
-  confidenceRange: document.querySelector("#confidenceRange"),
-  confidenceValue: document.querySelector("#confidenceValue"),
-  classSearch: document.querySelector("#classSearch"),
-  classChipList: document.querySelector("#classChipList"),
-  snapshotButton: document.querySelector("#snapshotButton"),
-  clearHistoryButton: document.querySelector("#clearHistoryButton"),
-  historyList: document.querySelector("#historyList"),
-  historyCount: document.querySelector("#historyCount"),
-  modelName: document.querySelector("#modelName"),
-  heatmapToggle: document.querySelector("#heatmapToggle"),
-  classChips: document.querySelector("#classChips"),
-  latencyChart: document.querySelector("#latencyChart"),
-  latencyAvg: document.querySelector("#latencyAvg"),
-  exportHistoryButton: document.querySelector("#exportHistoryButton"),
-  cornerBoxToggle: document.querySelector("#cornerBoxToggle"),
-  uploadDetect: document.querySelector("#uploadDetect"),
-  uploadDetectStatus: document.querySelector("#uploadDetectStatus"),
-  roiDrawButton: document.querySelector("#roiDrawButton"),
-  roiClearButton: document.querySelector("#roiClearButton"),
-  roiStatus: document.querySelector("#roiStatus"),
-  pauseButton: document.querySelector("#pauseButton"),
-  trailToggle: document.querySelector("#trailToggle"),
-  alertSoundToggle: document.querySelector("#alertSoundToggle"),
-  themeToggle: document.querySelector("#themeToggle"),
-  privacyToggle: document.querySelector("#privacyToggle"),
-  privacyNote: document.querySelector("#privacyNote"),
-  sonifyToggle: document.querySelector("#sonifyToggle"),
-  ghostToggle: document.querySelector("#ghostToggle"),
-  spatialAudioToggle: document.querySelector("#spatialAudioToggle"),
-  alertFilmstrip: document.querySelector("#alertFilmstrip"),
-  filmstripCount: document.querySelector("#filmstripCount"),
-  exportFilmstrip: document.querySelector("#exportFilmstrip"),
-  densityChart: document.querySelector("#densityChart"),
-  densityAvg: document.querySelector("#densityAvg"),
-  proximityRadar: document.querySelector("#proximityRadar"),
-  radarCount: document.querySelector("#radarCount"),
-  privacyBlurRange: document.querySelector("#privacyBlurRange"),
-  privacyBlurValue: document.querySelector("#privacyBlurValue"),
-  ghostOpacityRange: document.querySelector("#ghostOpacityRange"),
-  ghostOpacityValue: document.querySelector("#ghostOpacityValue"),
-  sessionFrames: document.querySelector("#sessionFrames"),
-  sessionDetections: document.querySelector("#sessionDetections"),
-  sessionClasses: document.querySelector("#sessionClasses"),
-  roiAlerts: document.querySelector("#roiAlerts"),
-  modeServer: document.querySelector("#modeServer"),
-  modeBrowser: document.querySelector("#modeBrowser"),
-  modeChip: document.querySelector("#modeChip"),
-  demoBadge: document.querySelector("#demoBadge"),
-  hudStats: document.querySelector("#hudStats"),
-  hudState: document.querySelector("#hudState"),
-  eyebrow: document.querySelector("#eyebrow"),
-  sampleRow: document.querySelector("#sampleRow"),
-  modelOverlay: document.querySelector("#modelOverlay"),
-  modelOverlayStatus: document.querySelector("#modelOverlayStatus"),
-  fullscreenButton: document.querySelector("#fullscreenButton"),
-  syntheticDemoButton: document.querySelector("#syntheticDemoButton"),
-  studioCanvas: document.querySelector("#studioCanvas"),
-  studioNote: document.querySelector("#studioNote"),
-  vanishMode: document.querySelector("#vanishMode"),
-  padRange: document.querySelector("#padRange"),
-  padValue: document.querySelector("#padValue"),
-  backgroundColor: document.querySelector("#backgroundColor"),
-  gradeSelect: document.querySelector("#gradeSelect"),
-  mirrorToggle: document.querySelector("#mirrorToggle"),
-  autoFrameToggle: document.querySelector("#autoFrameToggle"),
-  nameplateInput: document.querySelector("#nameplateInput"),
-  burnHudToggle: document.querySelector("#burnHudToggle"),
-  capturePlateButton: document.querySelector("#capturePlateButton"),
-  photoBoothButton: document.querySelector("#photoBoothButton"),
-  cleanFeedButton: document.querySelector("#cleanFeedButton"),
-  recordButton: document.querySelector("#recordButton"),
-  virtualCamToggle: document.querySelector("#virtualCamToggle"),
-  virtualCamStatus: document.querySelector("#virtualCamStatus"),
-  videoAppGuide: document.querySelector("#videoAppGuide"),
-  boothCountdown: document.querySelector("#boothCountdown"),
-  boothPreview: document.querySelector("#boothPreview"),
-  downloadBooth: document.querySelector("#downloadBooth"),
-  homeScreen: document.querySelector("#homeScreen"),
-  studioWorkspace: document.querySelector("#studioWorkspace"),
-  invisibleChip: document.querySelector("#invisibleChip"),
-  copilotKey: document.querySelector("#copilotKey"),
-  copilotModel: document.querySelector("#copilotModel"),
-  copilotThread: document.querySelector("#copilotThread"),
-  copilotInput: document.querySelector("#copilotInput"),
-  copilotListen: document.querySelector("#copilotListen"),
-  copilotAsk: document.querySelector("#copilotAsk"),
-  copilotStatus: document.querySelector("#copilotStatus"),
-  copilotUseScene: document.querySelector("#copilotUseScene"),
-};
+const MAX_IMAGE_BYTES = 1_500_000;
 
 const SAMPLE_SCENES = {
-  desk: { src: "static/samples/desk.jpg", label: "Desk" },
-  kitchen: { src: "static/samples/kitchen.jpg", label: "Kitchen" },
-  street: { src: "static/samples/street.jpg", label: "Street" },
+  desk: { src: "static/samples/desk.jpg", label: "Desk sample" },
+  kitchen: { src: "static/samples/kitchen.jpg", label: "Kitchen sample" },
+  street: { src: "static/samples/street.jpg", label: "Street sample" },
 };
 
 const CLASS_PRESETS = {
   all: [],
   people: ["person"],
   vehicles: ["bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat"],
-  kitchen: [
-    "bottle",
-    "wine glass",
-    "cup",
-    "fork",
-    "knife",
-    "spoon",
-    "bowl",
-    "banana",
-    "apple",
-    "sandwich",
-    "orange",
-    "broccoli",
-    "carrot",
-    "hot dog",
-    "pizza",
-    "donut",
-    "cake",
-  ],
+  kitchen: ["bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake"],
 };
 
+const LOOKS = {
+  plain: { effect: "none", grade: "none", mirror: false, note: "Plain: the outgoing picture is untouched." },
+  call: { effect: "disappear", grade: "none", mirror: false, vanishMode: "people", note: "Call: people leave the outgoing picture." },
+  booth: { effect: "portrait", grade: "warm", note: "Booth: a warm portrait with a soft background." },
+};
+
+// ------------------------------------------------------------------ setup ---
+
+const ids = [
+  "tallyLamp", "osdEngine", "osdSource", "osdFps", "osdLatency", "osdObjects", "engineButton", "paletteButton",
+  "themeButton", "themeLabel", "helpButton", "monitor", "tallyTag", "monitorTitle", "monitorMeta", "videoStage",
+  "video", "studioCanvas", "heatmap", "overlay", "boothCountdown", "modelOverlay", "modelOverlayStatus", "emptyState",
+  "slateLead", "demoBadge", "hudState", "invisibleChip", "maskChip", "hudStats", "cameraToggle", "cameraToggleLabel",
+  "pauseButton", "pauseLabel", "snapshotButton", "uploadDetect", "zoneButton", "fullscreenButton", "classChips",
+  "nowEmpty", "diaryLatest", "engineList", "engineNote", "confidenceRange", "confidenceValue", "fpsRange", "fpsValue",
+  "widthRange", "widthValue", "classSearch", "classChipList", "classNote", "labelToggle", "cornerBoxToggle",
+  "trailToggle", "glideToggle", "ghostToggle", "ghostOpacityRange", "ghostOpacityValue", "heatmapToggle",
+  "privacyToggle", "privacyBlurRange", "privacyBlurValue", "privacyNote", "uploadDetectStatus", "studioNote",
+  "maskToggle", "maskNote", "vanishMode", "padRange", "padValue", "backgroundColor", "plateNote", "gradeSelect",
+  "mirrorToggle", "autoFrameToggle", "nameplateInput", "burnHudToggle", "photoBoothButton", "boothPreview",
+  "downloadBooth", "cleanFeedButton", "recordButton", "virtualCamToggle", "virtualCamStatus", "videoAppSelect",
+  "videoAppGuide", "roiDrawButton", "roiClearButton", "roiStatus", "zoneList", "alertSoundToggle",
+  "spatialAudioToggle", "sonifyToggle", "filmstripCount", "alertFilmstrip", "exportFilmstrip", "sessionFrames",
+  "sessionDetections", "sessionClasses", "roiAlerts", "latencyAvg", "latencyChart", "densityAvg", "densityChart",
+  "radarCount", "proximityRadar", "diaryCount", "diaryEmpty", "diaryList", "lastUpdated", "detectionList",
+  "historyCount", "historyList", "exportHistoryButton", "clearHistoryButton", "copilotModel", "copilotModels",
+  "copilotKey", "copilotUseScene", "copilotAttachFrame", "copilotPrivacy", "copilotThread", "copilotInput",
+  "copilotListen", "copilotAsk", "copilotStatus", "paletteDialog", "paletteInput", "paletteList", "helpDialog",
+  "shortcutList", "toasts", "srSummary", "captureCanvas",
+];
+const els = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
+els.stage = els.videoStage;
+els.providerButtons = $$("[data-provider]");
+els.providerGroup = $(".provider-switch");
+
+const storage = (() => {
+  try {
+    const probe = "__rtd_probe__";
+    window.localStorage.setItem(probe, "1");
+    window.localStorage.removeItem(probe);
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+})();
+
+let settings = loadSettings(storage);
+const toast = createToaster(els.toasts);
+const browserSession = createBrowserSession();
+const glide = createGlide();
+const segmenter = createPersonSegmenter();
+let serverRuntime = null;
+
 const state = {
-  mode: "browser",
   serverAvailable: false,
+  yoloStatus: "unknown",
+  yoloError: "",
+  engineId: "efficientdet-lite0",
+  engineLoading: false,
+  source: null,
   stream: null,
-  demoCanvas: null,
   demoTimer: null,
-  demoMode: false,
-  stillCanvas: null,
-  stillMode: false,
-  stillDirty: false,
-  running: false,
-  inFlight: false,
-  targetFps: Number(elements.fpsRange.value),
-  processingWidth: Number(elements.widthRange.value),
-  showLabels: true,
-  detections: [],
-  frameSize: { width: 640, height: 360 },
-  sentFrames: 0,
-  fpsStartedAt: performance.now(),
-  confidence: Number(elements.confidenceRange.value),
-  selectedClasses: [],
-  classQuery: "",
-  history: [],
-  modelClasses: [...COCO_CLASSES],
-  classCounts: {},
-  latencySamples: [],
-  showHeatmap: true,
-  heatmapCells: Array.from({ length: 16 * 9 }, () => 0),
-  cornerBoxes: false,
-  showTrails: true,
-  alertSound: true,
+  loopTimer: null,
   paused: false,
+  inFlight: false,
+  detections: [],
+  ghosts: [],
+  frameSize: { width: 640, height: 360 },
+  classCounts: {},
+  latency: [],
+  density: [],
+  fpsFrames: 0,
+  fpsStartedAt: performance.now(),
+  fps: 0,
+  heat: Array.from({ length: 16 * 9 }, () => 0),
   rois: [],
   roiDrawing: false,
   roiStart: null,
   roiPreview: null,
   roiOccupied: [],
   roiCooldown: [],
-  privacyMode: false,
-  sonify: false,
-  ghostMode: true,
-  spatialAudio: true,
-  privacyBlur: 14,
-  ghostOpacity: 0.28,
-  ghostDetections: [],
+  zoneCounts: [],
+  zoneAlerts: [],
+  history: [],
   filmstrip: [],
-  densitySamples: [],
-  session: {
-    frames_processed: 0,
-    detections_total: 0,
-    classes_seen: [],
-    roi_alerts: 0,
-  },
-  studioEffect: "none",
-  copilotProvider: "grok",
-  copilotMessages: [],
-  copilotListener: null,
   diary: [],
   diaryCounts: {},
   diaryReady: false,
-  diaryLastLine: "",
-  vanishMode: "people",
-  studioPad: 0.18,
-  backgroundColor: "#1f8a70",
-  grade: "none",
-  mirror: false,
-  autoFrame: false,
-  nameplate: "",
-  burnHud: false,
+  diaryLast: "",
+  session: { frames_processed: 0, detections_total: 0, classes_seen: [], roi_alerts: 0 },
   plate: null,
   capturePlate: false,
-  virtualCam: false,
-  virtualCamSentAt: 0,
-  virtualCamBusy: false,
-  cleanFeed: false,
-  cleanFeedSentAt: 0,
+  emptyPlateFrames: 0,
+  crop: null,
+  mask: null,
+  maskAt: 0,
+  maskStatus: "idle",
+  cleanFeedWindow: null,
   studioChannel: null,
+  cleanFeedSentAt: 0,
+  virtualCamOn: false,
+  virtualCamBusy: false,
+  virtualCamSentAt: 0,
   recorder: null,
   recordChunks: [],
   boothRunning: false,
   boothStrip: null,
-  videoApp: "zoom",
-  emptyPlateFrames: 0,
+  lastFitted: null,
+  srText: "",
+  srAt: 0,
+  tally: "off",
 };
 
-let serverRuntime = null;
-let lastFitted = null;
+const apiUrl = (path) => new URL(path, document.baseURI).toString();
+const reducedMotion = () => prefersReducedMotion();
+const activeEngine = () => (state.engineId === "server" ? SERVER_ENGINE : engineById(state.engineId));
+const isLive = () => Boolean(state.source && state.source.kind !== "still");
 
-function apiUrl(path) {
-  return new URL(path, document.baseURI).toString();
+function persist() {
+  saveSettings(storage, settings);
 }
 
-function clampConfidence(value) {
-  return Math.min(0.95, Math.max(0.05, Number(value) || 0.35));
+function update(patch) {
+  settings = { ...settings, ...patch };
+  persist();
 }
 
-function reducedMotion() {
-  return prefersReducedMotion();
+// ----------------------------------------------------------------- theme ---
+
+let currentTheme = "system";
+
+function applyTheme(theme) {
+  currentTheme = theme;
+  document.documentElement.dataset.theme = theme;
+  const names = { system: "match system", dark: "dark", light: "light" };
+  els.themeLabel.textContent = `Theme: ${names[theme]}`;
+  els.themeButton.title = `Theme: ${names[theme]}`;
 }
 
-function setConnectionStatus(label, online = false) {
-  elements.connectionStatus.classList.toggle("online", Boolean(online));
-  elements.connectionStatus.querySelector("[data-status-label]").textContent = label;
+function cycleTheme() {
+  const theme = nextTheme(currentTheme);
+  saveTheme(storage, theme);
+  applyTheme(theme);
+  toast.show(`Theme: ${theme === "system" ? "match system" : theme}`);
 }
 
-function modeLabel(mode = state.mode) {
-  return mode === "server" ? "YOLOv8 · server" : "COCO-SSD · in-browser";
+// --------------------------------------------------------------- engines ---
+
+function yoloAvailable() {
+  return state.serverAvailable && state.yoloStatus !== "error";
 }
 
-function updateModeUi() {
-  const server = state.mode === "server";
-  elements.modeServer.setAttribute("aria-pressed", server ? "true" : "false");
-  elements.modeBrowser.setAttribute("aria-pressed", server ? "false" : "true");
-  elements.modeChip.textContent = modeLabel();
-  elements.eyebrow.textContent = server ? "Local YOLOv8 console" : "On-device vision console";
-  elements.modelName.textContent = server ? "YOLOv8n" : "coco-ssd";
-  elements.privacyNote.textContent = server
-    ? "Overlay only — frames still go to the local model. Person boxes are blurred on the capture canvas before JPEG encode."
-    : "On-device, frames stay in this tab.";
-  if (elements.hudState && !state.running) {
-    elements.hudState.textContent = "Idle";
+function resolveEngine(id) {
+  if (id === "server") {
+    return yoloAvailable() ? "server" : defaultEngineId(false);
+  }
+  if (id && id !== "auto" && engineById(id)) {
+    return id;
+  }
+  return defaultEngineId(yoloAvailable());
+}
+
+function renderEngineList() {
+  els.engineList.replaceChildren(
+    ...ENGINES.map((engine) => {
+      const disabled = engine.id === "server" && !yoloAvailable();
+      const tags = [...(engine.tags || [])];
+      let description = engine.description;
+      if (engine.id === "server") {
+        if (!state.serverAvailable) {
+          description = "Run python -m app on this computer, then open 127.0.0.1:8000.";
+          tags.push("Not running");
+        } else if (state.yoloStatus === "error") {
+          description = state.yoloError || "The server is running but YOLOv8 could not load.";
+          tags.push("Unavailable");
+        } else if (state.yoloStatus === "mock") {
+          tags.push("Simulated");
+        }
+      }
+      const input = h("input", {
+        type: "radio",
+        name: "engine",
+        value: engine.id,
+        checked: state.engineId === engine.id,
+        disabled,
+        onChange: () => selectEngine(engine.id, { user: true }),
+      });
+      return h(
+        "label",
+        { class: "engine" },
+        input,
+        h("span", { class: "engine-name" }, engine.label, ...tags.map((tag) => h("span", { class: "engine-tag" }, tag))),
+        h("span", { class: "engine-desc" }, description),
+      );
+    }),
+  );
+}
+
+function updateEngineUi() {
+  const engine = activeEngine();
+  const server = state.engineId === "server";
+  els.osdEngine.textContent = engine?.short || "None";
+  els.engineNote.textContent = server
+    ? "Frames go to the YOLOv8 server on this computer. Nothing leaves the machine."
+    : "Detection runs in this tab. Frames are never uploaded.";
+  els.privacyNote.textContent = server
+    ? "With YOLOv8, people are also blurred in the frame before it is sent to the local server."
+    : "On-device: frames stay in this tab.";
+  els.slateLead.textContent = server
+    ? "Start your camera or open a sample scene. YOLOv8 runs on the local server, so frames stay on this computer."
+    : "Start your camera or open a sample scene. Objects are found on this device, and frames stay in this tab.";
+  for (const input of $$('input[name="engine"]')) {
+    input.checked = input.value === state.engineId;
   }
 }
 
-function setDrawing(active) {
-  state.roiDrawing = active;
-  elements.videoStage.classList.toggle("is-drawing", active);
-  elements.overlay.classList.toggle("is-drawing", active);
-  if (!active) {
-    state.roiStart = null;
-    state.roiPreview = null;
+function setLoading(message) {
+  els.modelOverlay.hidden = !message;
+  if (message) {
+    els.modelOverlayStatus.textContent = message;
   }
 }
+
+const engineLoads = new Map();
+
+/** Load the active browser engine once, however many callers ask at the same moment. */
+function ensureEngine() {
+  const engine = activeEngine();
+  if (!engine || engine.kind === "server" || engine.ready) {
+    return Promise.resolve(engine);
+  }
+  if (engineLoads.has(engine.id)) {
+    return engineLoads.get(engine.id);
+  }
+  state.engineLoading = true;
+  setLoading(`Loading ${engine.short}`);
+  const load = engine
+    .load((message) => setLoading(message))
+    .then(() => {
+      toast.ok(`${engine.short} is ready`);
+      return engine;
+    })
+    .catch((error) => {
+      const fallback = engineById(FALLBACK_ENGINE_ID);
+      if (engine.id !== fallback.id && state.engineId === engine.id) {
+        toast.error(`${engine.short} could not start here (${error.message || "load failed"}). Using ${fallback.short}.`);
+        state.engineId = fallback.id;
+        updateEngineUi();
+        engineLoads.delete(engine.id);
+        return ensureEngine();
+      }
+      toast.error(error.message || "The model could not load. Check the connection and try again.");
+      throw error;
+    })
+    .finally(() => {
+      engineLoads.delete(engine.id);
+      state.engineLoading = engineLoads.size > 0;
+      if (!state.engineLoading) {
+        setLoading("");
+      }
+    });
+  engineLoads.set(engine.id, load);
+  return load;
+}
+
+async function selectEngine(id, { user = false } = {}) {
+  if (id === "server" && !yoloAvailable()) {
+    toast.error(state.serverAvailable ? state.yoloError || "YOLOv8 is not available on this server." : "No local server here. Run python -m app to use YOLOv8.");
+    updateEngineUi();
+    return;
+  }
+  const previous = state.engineId;
+  state.engineId = resolveEngine(id);
+  if (user) {
+    update({ engine: state.engineId });
+  }
+  updateEngineUi();
+  if (previous !== state.engineId) {
+    browserSession.resetTracks();
+    glide.reset();
+  }
+  if (state.engineId === "server") {
+    if (state.source) {
+      ensureServerRuntime().connect();
+    }
+  } else {
+    serverRuntime?.disconnect();
+    if (state.source) {
+      await ensureEngine().catch(() => {});
+    }
+  }
+  if (state.source?.kind === "still") {
+    runStill();
+  }
+}
+
+// ---------------------------------------------------------------- server ---
+
+function ensureServerRuntime() {
+  if (serverRuntime) {
+    return serverRuntime;
+  }
+  serverRuntime = createServerRuntime({
+    onStatus(status) {
+      if (status === "open") {
+        sendDetectionConfig();
+      }
+      if (status === "reconnecting" && state.source) {
+        els.hudState.textContent = "Reconnecting";
+      }
+    },
+    onDetections: applyDetections,
+    onError(message, code) {
+      if (code === "model_unavailable") {
+        state.yoloStatus = "error";
+        state.yoloError = message;
+        renderEngineList();
+        toast.error(message);
+        selectEngine(defaultEngineId(false));
+        return;
+      }
+      els.lastUpdated.textContent = message;
+      if (code.startsWith("close_")) {
+        toast.error(message);
+      }
+    },
+    onRoiAck(payload) {
+      if (typeof payload.roi_alerts === "number") {
+        state.session.roi_alerts = payload.roi_alerts;
+        els.roiAlerts.textContent = String(payload.roi_alerts);
+      }
+    },
+  });
+  return serverRuntime;
+}
+
+function sendDetectionConfig() {
+  if (state.engineId === "server") {
+    ensureServerRuntime().sendConfig({ confidence: settings.confidence, classes: settings.selectedClasses });
+  }
+}
+
+async function probeHealth() {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 2000);
+  try {
+    const response = await fetch(apiUrl("health"), { cache: "no-store", signal: controller.signal });
+    if (!response.ok) {
+      return null;
+    }
+    const payload = await response.json();
+    return payload?.status === "ok" ? payload : null;
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+// --------------------------------------------------------------- sources ---
 
 function currentSource() {
-  if (state.stillCanvas) {
-    return state.stillCanvas;
-  }
-  if (state.demoMode) {
-    return state.demoCanvas;
-  }
-  return elements.video;
+  return state.source?.element || null;
 }
 
 function sourceSize(source) {
   return {
-    width: source?.videoWidth || source?.width || state.frameSize.width,
-    height: source?.videoHeight || source?.height || state.frameSize.height,
+    width: source?.videoWidth || source?.naturalWidth || source?.width || state.frameSize.width,
+    height: source?.videoHeight || source?.naturalHeight || source?.height || state.frameSize.height,
   };
 }
 
-function syncStageAspect(width, height) {
+function setStageRatio(width, height) {
   if (width > 0 && height > 0) {
-    elements.videoStage.style.aspectRatio = `${width} / ${height}`;
+    els.stage.style.setProperty("--stage-ratio", `${width} / ${height}`);
   }
 }
 
-function setDemoBadge(visible) {
-  elements.demoBadge.classList.toggle("hidden", !visible);
-  if (visible) {
-    elements.hudState.textContent = "Demo";
+function clearStageMedia() {
+  window.clearInterval(state.demoTimer);
+  state.demoTimer = null;
+  for (const node of $$(".still-frame, .demo-feed", els.stage)) {
+    node.remove();
   }
+  if (state.stream) {
+    state.stream.getTracks().forEach((track) => track.stop());
+    state.stream = null;
+  }
+  els.video.srcObject = null;
+  els.video.hidden = false;
+  els.demoBadge.hidden = true;
+}
+
+function resetSourceState() {
+  state.detections = [];
+  state.ghosts = [];
+  state.classCounts = {};
+  state.roiOccupied = state.rois.map(() => false);
+  state.zoneCounts = state.rois.map(() => 0);
+  state.mask = null;
+  state.crop = null;
+  // The plate belongs to one source, and nothing is learned before that source has detections.
+  state.plate = null;
+  state.detectionsReady = false;
+  state.maskMissed = false;
+  glide.reset();
+  browserSession.resetTracks();
+  // A new source starts a fresh diary baseline instead of logging everything as "left".
+  state.diaryReady = false;
+  state.diaryCounts = {};
+  renderClassChips();
+  renderDetectionList();
+  updateStudioChips();
+}
+
+function attachSource(source) {
+  clearTimeout(state.loopTimer);
+  state.source = source;
+  state.paused = false;
+  state.inFlight = false;
+  resetSourceState();
+  els.emptyState.hidden = true;
+  const size = sourceSize(source.element);
+  setStageRatio(size.width, size.height);
+  state.frameSize = { width: size.width, height: size.height };
+  syncTransport();
+  els.monitorTitle.textContent = source.label;
+  els.osdSource.textContent = source.short || source.label;
+  els.hudState.textContent = source.kind === "camera" ? "Live" : source.kind === "synthetic" ? "Synthetic" : "Still";
+  els.demoBadge.hidden = source.kind !== "synthetic";
+  updateStudioChips();
+  updateTally();
+}
+
+function detachSource() {
+  clearTimeout(state.loopTimer);
+  serverRuntime?.disconnect();
+  clearStageMedia();
+  state.source = null;
+  state.paused = false;
+  resetSourceState();
+  els.emptyState.hidden = false;
+  els.monitorTitle.textContent = "No source";
+  els.monitorMeta.textContent = "";
+  els.osdSource.textContent = "None";
+  els.osdFps.textContent = "0 fps";
+  els.osdLatency.textContent = "0 ms";
+  els.osdObjects.textContent = "0";
+  els.hudState.textContent = "Idle";
+  els.hudStats.textContent = "0 objects";
+  setRoiDrawing(false);
+  syncTransport();
+  updateTally();
 }
 
 async function requestCameraStream() {
-  const mediaDevices = globalThis.navigator?.mediaDevices;
+  const mediaDevices = navigator.mediaDevices;
   if (!mediaDevices?.getUserMedia) {
-    return { stream: null, reason: "camera API unavailable" };
+    return { stream: null, reason: "This browser cannot use a camera here. Camera access needs https or localhost." };
   }
-
   let timedOut = false;
   const request = mediaDevices
-    .getUserMedia({
-      audio: false,
-      video: {
-        facingMode: { ideal: "user" },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-    })
+    .getUserMedia({ audio: false, video: { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 720 } } })
     .then((stream) => {
       if (timedOut) {
         stream.getTracks().forEach((track) => track.stop());
@@ -382,151 +547,177 @@ async function requestCameraStream() {
       }
       return stream;
     });
-
   const timeout = new Promise((resolve) => {
     window.setTimeout(() => {
       timedOut = true;
       resolve(null);
     }, CAMERA_TIMEOUT_MS);
   });
-
   try {
     const stream = await Promise.race([request, timeout]);
-    return {
-      stream,
-      reason: stream ? "" : "camera permission timed out",
-    };
+    return { stream, reason: stream ? "" : "The camera did not answer within 8 seconds." };
   } catch (error) {
+    const blocked = error?.name === "NotAllowedError" || error?.name === "SecurityError";
     return {
       stream: null,
-      reason: error?.message || "camera unavailable",
+      reason: blocked
+        ? "Camera access is blocked. Allow it from the address bar to go live."
+        : error?.name === "NotFoundError"
+          ? "No camera was found."
+          : error?.message || "The camera could not start.",
     };
   }
 }
 
-function drawDemoFrame(canvas) {
-  const context = canvas.getContext("2d");
-  const width = canvas.width;
-  const height = canvas.height;
-  const now = performance.now() / 1000;
-  const gradient = context.createLinearGradient(0, 0, width, height);
-  gradient.addColorStop(0, "#071111");
-  gradient.addColorStop(0.55, "#102724");
-  gradient.addColorStop(1, "#201313");
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, width, height);
-
-  const orbX = width * (0.5 + Math.sin(now * 0.8) * 0.22);
-  const orbY = height * (0.45 + Math.cos(now * 0.7) * 0.18);
-  context.fillStyle = "#38d6c6";
-  context.beginPath();
-  context.arc(orbX, orbY, 56, 0, Math.PI * 2);
-  context.fill();
-
-  context.fillStyle = "#ff6f59";
-  context.fillRect(width * 0.18, height * 0.58, 170, 108);
-  context.fillStyle = "#f5c84b";
-  context.fillRect(width * 0.68, height * 0.22, 120, 150);
-
-  context.fillStyle = "rgba(245, 241, 232, 0.92)";
-  context.font = "700 32px ui-sans-serif, system-ui, sans-serif";
-  context.fillText("Demo video feed", 42, 66);
-  context.font = "500 18px ui-sans-serif, system-ui, sans-serif";
-  context.fillText("Camera fallback is active", 42, 98);
+async function startCamera() {
+  if (state.source?.kind === "camera") {
+    return;
+  }
+  resumeAudio();
+  els.cameraToggle.disabled = true;
+  els.cameraToggleLabel.textContent = "Starting camera";
+  const camera = await requestCameraStream();
+  els.cameraToggle.disabled = false;
+  if (!camera.stream) {
+    syncTransport();
+    toast.error(`${camera.reason} Showing the desk sample instead.`);
+    await loadSample("desk");
+    return;
+  }
+  clearStageMedia();
+  state.stream = camera.stream;
+  els.video.srcObject = camera.stream;
+  await els.video.play().catch(() => {});
+  if (!els.video.videoWidth) {
+    await new Promise((resolve) => {
+      els.video.addEventListener("loadedmetadata", resolve, { once: true });
+      window.setTimeout(resolve, 1500);
+    });
+  }
+  const trackLabel = camera.stream.getVideoTracks()[0]?.label || "Camera";
+  attachSource({ kind: "camera", element: els.video, label: trackLabel, short: "Camera" });
+  await startDetection();
 }
 
-function clearStageMedia() {
-  if (state.demoTimer) {
-    window.clearInterval(state.demoTimer);
-    state.demoTimer = null;
-  }
-  if (state.demoCanvas) {
-    state.demoCanvas.remove();
-    state.demoCanvas = null;
-  }
-  if (state.stillCanvas) {
-    state.stillCanvas.remove();
-    state.stillCanvas = null;
-  }
-  state.demoMode = false;
-  state.stillMode = false;
-  state.stillDirty = false;
-  elements.video.style.display = "";
-  setDemoBadge(false);
-}
-
-function createDemoStream() {
+function startSynthetic() {
   clearStageMedia();
   const canvas = document.createElement("canvas");
   canvas.className = "demo-feed";
   canvas.width = 960;
   canvas.height = 540;
-  canvas.setAttribute("aria-label", "Demo video feed");
-  elements.videoStage.insertBefore(canvas, elements.heatmap);
-  elements.video.style.display = "none";
-  drawDemoFrame(canvas);
-  state.demoTimer = window.setInterval(() => drawDemoFrame(canvas), 1000 / 12);
-  state.demoCanvas = canvas;
-  state.demoMode = true;
-  setDemoBadge(true);
-  elements.lastUpdated.textContent = "Demo stream active";
-  if (typeof canvas.captureStream === "function") {
-    return canvas.captureStream(12);
-  }
-  return null;
+  canvas.setAttribute("aria-label", "Synthetic test feed");
+  els.stage.insertBefore(canvas, els.heatmap);
+  els.video.hidden = true;
+  const draw = () => drawSyntheticFrame(canvas);
+  draw();
+  state.demoTimer = window.setInterval(draw, 1000 / 24);
+  attachSource({ kind: "synthetic", element: canvas, label: "Synthetic test feed", short: "Synthetic" });
+  startDetection();
 }
 
-function showStillImage(image) {
+function drawSyntheticFrame(canvas) {
+  const context = canvas.getContext("2d");
+  const { width, height } = canvas;
+  const t = performance.now() / 1000;
+  const bars = ["#c0c0c0", "#c0c000", "#00c0c0", "#00c000", "#c000c0", "#c00000", "#0000c0"];
+  bars.forEach((color, index) => {
+    context.fillStyle = color;
+    context.fillRect((index * width) / bars.length, 0, width / bars.length + 1, height * 0.7);
+  });
+  context.fillStyle = "#121418";
+  context.fillRect(0, height * 0.7, width, height * 0.3);
+  const x = width * (0.5 + Math.sin(t * 0.9) * 0.32);
+  context.fillStyle = "#f5f6f7";
+  context.beginPath();
+  context.arc(x, height * 0.85, 26, 0, Math.PI * 2);
+  context.fill();
+  context.fillStyle = "#f5f6f7";
+  context.font = '650 26px "Saira", ui-sans-serif, sans-serif';
+  context.fillText("Synthetic test feed", 28, height * 0.7 + 44);
+  context.font = '500 16px "Saira", ui-sans-serif, sans-serif';
+  context.fillText("For checking the pipeline. The models see no real objects here.", 28, height * 0.7 + 72);
+}
+
+function showStill(image, label, short) {
   clearStageMedia();
   const canvas = document.createElement("canvas");
   canvas.className = "still-frame";
   canvas.width = image.naturalWidth || image.width;
   canvas.height = image.naturalHeight || image.height;
   canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-  canvas.setAttribute("aria-label", "Uploaded still image");
-  elements.videoStage.insertBefore(canvas, elements.heatmap);
-  elements.video.style.display = "none";
-  state.stillCanvas = canvas;
-  state.stillMode = true;
-  state.stillDirty = true;
-  state.frameSize = { width: canvas.width, height: canvas.height };
-  syncStageAspect(canvas.width, canvas.height);
-  elements.emptyState.classList.add("hidden");
-  elements.snapshotButton.disabled = false;
-  elements.clearHistoryButton.disabled = false;
-  elements.exportHistoryButton.disabled = false;
-  elements.roiDrawButton.disabled = false;
-  elements.roiClearButton.disabled = false;
-  elements.pauseButton.disabled = false;
-  setDemoBadge(false);
-  elements.hudState.textContent = "Still";
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", label);
+  els.stage.insertBefore(canvas, els.heatmap);
+  els.video.hidden = true;
+  attachSource({ kind: "still", element: canvas, label, short });
 }
 
-function cloakPersons(canvas, detections, frameSize) {
-  if (!state.privacyMode || state.mode !== "server" || !detections?.length) {
+async function loadSample(id) {
+  const scene = SAMPLE_SCENES[id];
+  if (!scene) {
     return;
   }
-  const context = canvas.getContext("2d");
-  const scaleX = canvas.width / Math.max(1, frameSize.width);
-  const scaleY = canvas.height / Math.max(1, frameSize.height);
-  const radius = Math.max(6, state.privacyBlur);
-  for (const detection of detections) {
-    if (!PRIVACY_LABELS.has(detection.label)) {
-      continue;
-    }
-    const x = Math.max(0, detection.box.x * scaleX);
-    const y = Math.max(0, detection.box.y * scaleY);
-    const width = Math.max(1, detection.box.width * scaleX);
-    const height = Math.max(1, detection.box.height * scaleY);
-    const tmp = document.createElement("canvas");
-    tmp.width = Math.max(1, Math.round(width));
-    tmp.height = Math.max(1, Math.round(height));
-    const tmpContext = tmp.getContext("2d");
-    tmpContext.filter = `blur(${radius}px)`;
-    tmpContext.drawImage(canvas, x, y, width, height, 0, 0, tmp.width, tmp.height);
-    context.drawImage(tmp, x, y, width, height);
+  resumeAudio();
+  try {
+    const image = await loadImage(scene.src);
+    showStill(image, scene.label, scene.label.replace(" sample", ""));
+    await runStill();
+    els.uploadDetectStatus.textContent = `${scene.label}: ${plural(state.detections.length, "object")}.`;
+  } catch (error) {
+    toast.error(error.message || "That sample could not load.");
   }
 }
+
+async function openImages(fileList) {
+  const files = [...(fileList || [])].filter((file) => file && file.type.startsWith("image/"));
+  if (!files.length) {
+    toast.error("Choose an image file: JPEG, PNG, WebP or GIF.");
+    return;
+  }
+  const [first, ...rest] = files;
+  try {
+    showStill(await fileToImage(first), first.name, "Image");
+  } catch (error) {
+    toast.error(error.message);
+    return;
+  }
+  await runStill();
+  if (!rest.length) {
+    els.uploadDetectStatus.textContent = `${first.name}: ${plural(state.detections.length, "object")}.`;
+    return;
+  }
+  els.uploadDetectStatus.textContent = `Checking ${files.length} images…`;
+  let total = state.detections.length;
+  try {
+    if (state.engineId === "server") {
+      const form = new FormData();
+      rest.forEach((file) => form.append("images", file));
+      const response = await fetch(apiUrl(`api/detect/batch?confidence=${settings.confidence}`), { method: "POST", body: form });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "The batch was rejected.");
+      }
+      total += (payload.results || []).reduce((sum, item) => sum + (item.detections?.length || 0), 0);
+    } else {
+      const engine = await ensureEngine();
+      for (const file of rest) {
+        const image = await fileToImage(file);
+        const payload = await browserSession.detect(engine, image, {
+          confidence: settings.confidence,
+          classes: settings.selectedClasses,
+          track: false,
+        });
+        total += payload.detections.length;
+      }
+    }
+    els.uploadDetectStatus.textContent = `${files.length} images: ${plural(total, "object")} in all. The first is on the monitor.`;
+  } catch (error) {
+    els.uploadDetectStatus.textContent = error.message || "The batch could not be checked.";
+    toast.error(els.uploadDetectStatus.textContent);
+  }
+}
+
+// ------------------------------------------------------------- detection ---
 
 function grabFrame() {
   const source = currentSource();
@@ -537,319 +728,295 @@ function grabFrame() {
   if (!size.width || !size.height) {
     return null;
   }
-  if (!state.demoMode && !state.stillMode && elements.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+  if (source === els.video && els.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
     return null;
   }
-  const width = Math.min(state.processingWidth, size.width);
+  const width = Math.min(settings.processingWidth, size.width);
   const height = Math.round(width * (size.height / size.width));
-  const canvas = elements.captureCanvas;
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
+  const canvas = els.captureCanvas;
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  const context = canvas.getContext("2d", { willReadFrequently: false });
   context.drawImage(source, 0, 0, width, height);
-  cloakPersons(canvas, state.detections, state.frameSize);
+  if (settings.privacyMode && state.engineId === "server") {
+    cloakPeople(canvas, state.detections, state.frameSize);
+  }
   return canvas;
 }
 
-function applyDetections(payload) {
-  if (!payload || payload.type !== "detections") {
-    return;
-  }
-  if (state.ghostMode && !reducedMotion() && state.detections.length) {
-    state.ghostDetections = state.detections.map((item) => ({
-      ...item,
-      box: { ...item.box },
-    }));
-  } else {
-    state.ghostDetections = [];
-  }
-  state.detections = payload.detections ?? [];
-  noteSceneDiary(state.detections);
-  state.classCounts = payload.class_counts ?? {};
-  state.frameSize = {
-    width: payload.frame_width || 1,
-    height: payload.frame_height || 1,
-  };
-  if (!reducedMotion()) {
-    sonifyDetections(state.detections, { enabled: state.sonify, chord: true });
-  }
-  recordDensity(state.detections.length);
-  recordHistory(payload);
-  updateHeatmap(state.heatmapCells, state.detections, state.frameSize);
-  recordLatency(payload.latency_ms);
-  renderClassCounts();
-  updateSessionStats(payload.session);
-  checkRoiAlerts(state.detections);
-  elements.objectCount.textContent = String(state.detections.length);
-  elements.latency.textContent = `${payload.latency_ms ?? "--"} ms`;
-  elements.lastUpdated.textContent = new Date().toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  if (elements.hudStats) {
-    elements.hudStats.textContent = `${state.detections.length} obj · ${payload.latency_ms ?? "--"} ms`;
-  }
-  renderDetectionList();
-}
-
-function ensureServerRuntime() {
-  if (serverRuntime) {
-    return serverRuntime;
-  }
-  serverRuntime = createServerRuntime({
-    onStatus: setConnectionStatus,
-    onOpen() {
-      sendDetectionConfig();
-    },
-    onNotice(message) {
-      elements.lastUpdated.textContent = message;
-    },
-    onDetections: applyDetections,
-    onRoiAck(payload) {
-      if (typeof payload.roi_alerts === "number") {
-        state.session.roi_alerts = payload.roi_alerts;
-        elements.roiAlerts.textContent = String(payload.roi_alerts);
-      }
-    },
-  });
-  return serverRuntime;
-}
-
-function sendDetectionConfig() {
-  if (state.mode !== "server") {
-    return;
-  }
-  ensureServerRuntime().sendConfig({
-    confidence: state.confidence,
-    classes: state.selectedClasses,
-  });
-}
-
-async function probeHealth() {
-  try {
-    const response = await fetch(apiUrl("health"), { cache: "no-store" });
-    if (!response.ok) {
-      return false;
+function cloakPeople(canvas, detections, frameSize) {
+  const context = canvas.getContext("2d");
+  const sx = canvas.width / Math.max(1, frameSize.width);
+  const sy = canvas.height / Math.max(1, frameSize.height);
+  for (const detection of detections) {
+    if (detection.label !== "person") {
+      continue;
     }
-    const payload = await response.json();
-    return payload.status === "ok";
-  } catch {
-    return false;
+    const x = Math.max(0, detection.box.x * sx);
+    const y = Math.max(0, detection.box.y * sy);
+    const w = Math.max(1, detection.box.width * sx);
+    const hgt = Math.max(1, detection.box.height * sy);
+    context.save();
+    context.beginPath();
+    context.rect(x, y, w, hgt);
+    context.clip();
+    context.filter = `blur(${settings.privacyBlur}px)`;
+    context.drawImage(canvas, 0, 0);
+    context.restore();
   }
 }
 
-async function loadModelMetadata() {
-  if (state.mode === "browser") {
-    elements.modelName.textContent = "coco-ssd";
-    state.modelClasses = [...COCO_CLASSES];
-    renderClassChipPicker();
-    return;
-  }
-  try {
-    const response = await fetch(apiUrl("api/model"), { cache: "no-store" });
-    const payload = await response.json();
-    elements.modelName.textContent = payload.model || "YOLOv8n";
-    state.modelClasses = payload.classes?.length ? payload.classes : [...COCO_CLASSES];
-  } catch {
-    elements.modelName.textContent = "YOLOv8n";
-    state.modelClasses = [...COCO_CLASSES];
-  }
-  renderClassChipPicker();
-}
-
-async function setMode(nextMode, { user = false } = {}) {
-  if (nextMode !== "server" && nextMode !== "browser") {
-    return;
-  }
-  if (nextMode === "server" && !state.serverAvailable && user) {
-    elements.lastUpdated.textContent = "No FastAPI server at this origin.";
-  }
-  const changed = state.mode !== nextMode;
-  state.mode = nextMode;
-  updateModeUi();
-  if (!changed && !user) {
-    await loadModelMetadata();
-    return;
-  }
-  if (serverRuntime && nextMode !== "server") {
-    serverRuntime.disconnect();
-  }
-  await loadModelMetadata();
-  if (state.running) {
-    if (nextMode === "server") {
-      ensureServerRuntime().connect();
-      setConnectionStatus("Connecting", false);
-    } else {
-      setConnectionStatus("On-device", true);
-      try {
-        await ensureBrowserModel();
-        elements.lastUpdated.textContent = "COCO-SSD ready";
-      } catch (error) {
-        elements.lastUpdated.textContent = error.message || "Failed to load COCO-SSD";
-      }
-    }
-  } else if (nextMode === "browser") {
-    setConnectionStatus("On-device", false);
-  } else {
-    setConnectionStatus(state.serverAvailable ? "Ready" : "Offline", false);
-  }
-}
-
-function setModelOverlay(visible, message = "") {
-  if (!elements.modelOverlay) return;
-  elements.modelOverlay.classList.toggle("hidden", !visible);
-  if (elements.modelOverlayStatus && message) {
-    elements.modelOverlayStatus.textContent = message;
-  }
-}
-
-async function ensureBrowserModel() {
-  if (state.mode !== "browser") {
-    return;
-  }
-  setModelOverlay(true, "Loading TensorFlow.js…");
-  try {
-    await loadBrowserModel((message) => {
-      elements.lastUpdated.textContent = message;
-      setModelOverlay(true, message);
-    });
-  } finally {
-    setModelOverlay(false);
-  }
-}
-
-function loadImage(src) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`Could not load ${src}`));
-    image.src = src;
-  });
-}
-
-async function loadSampleScene(id) {
-  const scene = SAMPLE_SCENES[id];
-  if (!scene) {
-    return;
-  }
-  revealStudio();
-  await resumeAudio();
-  if (state.stream) {
-    state.stream.getTracks().forEach((track) => track.stop());
-    state.stream = null;
-  }
-  state.running = false;
-  try {
-    const image = await loadImage(scene.src);
-    showStillImage(image);
-    elements.hudState.textContent = scene.label;
-    elements.lastUpdated.textContent = `${scene.label} sample loaded`;
-    await ensureBrowserModel();
-    await rerunStillDetection();
-    elements.uploadDetectStatus.textContent = `${scene.label} scene: ${state.detections.length} object(s).`;
-  } catch (error) {
-    elements.lastUpdated.textContent = error.message || "Sample scene failed.";
-  }
-}
-
-async function startCamera() {
-  if (state.running) {
-    return;
-  }
-  revealStudio();
-  await resumeAudio();
-  clearStageMedia();
-
-  const camera = await requestCameraStream();
-  if (!camera.stream) {
-    elements.lastUpdated.textContent = `${camera.reason || "Camera unavailable"}. Loading desk sample.`;
-    await loadSampleScene("desk");
-    return;
-  }
-  state.stream = camera.stream;
-  elements.video.srcObject = state.stream;
-  await elements.video.play().catch(() => {});
-  setDemoBadge(false);
-
-  const source = currentSource();
-  const size = sourceSize(source);
-  syncStageAspect(size.width, size.height);
-
-  state.running = true;
-  state.paused = false;
-  elements.pauseButton.textContent = "Pause";
-  elements.emptyState.classList.add("hidden");
-  elements.startCameraSide.disabled = true;
-  elements.stopCamera.disabled = false;
-  elements.snapshotButton.disabled = false;
-  elements.clearHistoryButton.disabled = false;
-  elements.exportHistoryButton.disabled = false;
-  elements.roiDrawButton.disabled = false;
-  elements.roiClearButton.disabled = false;
-  elements.pauseButton.disabled = false;
-  if (!state.demoMode) {
-    elements.lastUpdated.textContent = "Camera connected";
-    elements.hudState.textContent = "Live";
-  }
-
-  if (state.mode === "server") {
+async function startDetection() {
+  if (state.engineId === "server") {
     ensureServerRuntime().connect();
   } else {
-    setConnectionStatus("On-device", true);
     try {
-      await ensureBrowserModel();
-      elements.lastUpdated.textContent = state.demoMode ? "Demo stream active" : "COCO-SSD ready";
-    } catch (error) {
-      elements.lastUpdated.textContent = error.message || "Failed to load COCO-SSD";
+      await ensureEngine();
+    } catch {
+      return;
     }
   }
-  captureLoop();
+  scheduleTick(0);
 }
 
-function stopCamera() {
-  state.running = false;
-  state.inFlight = false;
-  state.paused = false;
-  setDrawing(false);
-  if (serverRuntime) {
-    serverRuntime.disconnect();
+function scheduleTick(delay) {
+  clearTimeout(state.loopTimer);
+  if (isLive()) {
+    state.loopTimer = window.setTimeout(tick, delay);
   }
-  if (state.stream) {
-    state.stream.getTracks().forEach((track) => track.stop());
-    state.stream = null;
+}
+
+async function tick() {
+  if (!isLive()) {
+    return;
   }
-  elements.video.srcObject = null;
-  clearStageMedia();
-  resetBrowserSession();
-  state.detections = [];
-  noteSceneDiary([]);
-  state.ghostDetections = [];
+  const started = performance.now();
+  if (!state.paused && !state.inFlight && !state.engineLoading) {
+    await detectOnce();
+  }
+  const spent = performance.now() - started;
+  scheduleTick(Math.max(0, 1000 / settings.targetFps - spent));
+}
+
+async function detectOnce() {
+  const canvas = grabFrame();
+  if (!canvas) {
+    return;
+  }
+  if (state.engineId === "server") {
+    const runtime = ensureServerRuntime();
+    if (!runtime.isOpen || runtime.busy) {
+      return;
+    }
+    state.inFlight = true;
+    try {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.75));
+      if (blob && state.engineId === "server") {
+        runtime.sendFrame(await blob.arrayBuffer());
+      }
+    } finally {
+      state.inFlight = false;
+    }
+    return;
+  }
+  const engine = activeEngine();
+  if (!engine?.ready) {
+    return;
+  }
+  state.inFlight = true;
+  try {
+    const payload = await browserSession.detect(engine, canvas, {
+      confidence: settings.confidence,
+      classes: settings.selectedClasses,
+    });
+    if (state.source && engine.id === state.engineId) {
+      applyDetections(payload);
+    }
+  } catch (error) {
+    els.lastUpdated.textContent = error.message || "Detection failed on this frame.";
+  } finally {
+    state.inFlight = false;
+  }
+}
+
+async function runStill() {
+  const still = state.source?.kind === "still" ? state.source.element : null;
+  if (!still) {
+    return;
+  }
+  browserSession.resetTracks();
+  glide.reset();
+  if (state.engineId === "server") {
+    const blob = await new Promise((resolve) => still.toBlob(resolve, "image/jpeg", 0.9));
+    if (!blob) {
+      return;
+    }
+    const form = new FormData();
+    form.append("image", blob, "still.jpg");
+    try {
+      const started = performance.now();
+      const response = await fetch(apiUrl(`api/detect?confidence=${settings.confidence}`), { method: "POST", body: form });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "The server could not check that image.");
+      }
+      payload.rtt_ms = Math.round((performance.now() - started) * 10) / 10;
+      const wanted = settings.selectedClasses.length ? new Set(settings.selectedClasses) : null;
+      if (wanted) {
+        payload.detections = payload.detections.filter((item) => wanted.has(item.label));
+        payload.class_counts = countLabels(payload.detections);
+      }
+      applyDetections(payload);
+    } catch (error) {
+      toast.error(error.message);
+    }
+    return;
+  }
+  try {
+    const engine = await ensureEngine();
+    const payload = await browserSession.detect(engine, still, {
+      confidence: settings.confidence,
+      classes: settings.selectedClasses,
+    });
+    if (state.source?.element === still) {
+      applyDetections(payload);
+    }
+  } catch (error) {
+    els.lastUpdated.textContent = error.message || "Detection failed.";
+  }
+}
+
+function rerunIfStill() {
+  if (state.source?.kind === "still") {
+    runStill();
+  }
+}
+
+function applyDetections(payload) {
+  if (!payload || payload.type !== "detections" || !state.source) {
+    return;
+  }
+  const now = performance.now();
+  state.ghosts = settings.ghostMode ? state.detections.map((item) => ({ ...item, box: { ...item.box } })) : [];
+  state.detections = payload.detections || [];
+  state.detectionsReady = true;
+  state.classCounts = payload.class_counts || countLabels(state.detections);
+  state.frameSize = { width: payload.frame_width || 1, height: payload.frame_height || 1 };
+  glide.update(state.detections, state.frameSize, now);
+  noteSceneDiary(state.detections);
+  if (settings.sonify) {
+    sonifyDetections(state.detections, { enabled: true, chord: true });
+  }
+  state.density = [...state.density, state.detections.length].slice(-48);
+  const latency = typeof payload.rtt_ms === "number" ? payload.rtt_ms : payload.latency_ms;
+  if (typeof latency === "number") {
+    state.latency = [...state.latency, latency].slice(-48);
+  }
+  updateHeatmap(state.heat, state.detections, state.frameSize);
+  recordHistory(state.detections);
+  updateSessionStats(payload.session);
+  checkZones(state.detections);
+  countFps();
+  renderReadouts(latency);
+  renderClassChips();
   renderDetectionList();
-  elements.objectCount.textContent = "0";
-  elements.latency.textContent = "--";
-  elements.streamFps.textContent = "--";
-  elements.lastUpdated.textContent = "Idle";
-  elements.hudState.textContent = "Idle";
-  if (elements.hudStats) {
-    elements.hudStats.textContent = "0 obj · -- ms";
+  renderCharts();
+  announce();
+}
+
+function countFps() {
+  state.fpsFrames += 1;
+  const elapsed = performance.now() - state.fpsStartedAt;
+  if (elapsed >= 1000) {
+    state.fps = Math.round((state.fpsFrames * 1000) / elapsed);
+    state.fpsFrames = 0;
+    state.fpsStartedAt = performance.now();
   }
-  elements.emptyState.classList.remove("hidden");
-  showHome();
-  elements.startCameraSide.disabled = false;
-  elements.stopCamera.disabled = true;
-  elements.snapshotButton.disabled = true;
-  elements.clearHistoryButton.disabled = true;
-  elements.exportHistoryButton.disabled = true;
-  elements.roiDrawButton.disabled = true;
-  elements.roiClearButton.disabled = true;
-  elements.pauseButton.disabled = true;
-  elements.pauseButton.textContent = "Pause";
-  if (state.mode === "browser") {
-    setConnectionStatus("On-device", false);
-  } else {
-    setConnectionStatus("Offline", false);
+}
+
+function renderReadouts(latency) {
+  const average = state.latency.length ? state.latency.reduce((sum, value) => sum + value, 0) / state.latency.length : 0;
+  els.osdFps.textContent = isLive() ? `${state.fps} fps` : "Still";
+  els.osdLatency.textContent = `${Math.round(latency ?? average)} ms`;
+  els.osdObjects.textContent = String(state.detections.length);
+  els.hudStats.textContent = plural(state.detections.length, "object");
+  els.monitorMeta.textContent = `${state.frameSize.width}×${state.frameSize.height}`;
+  els.lastUpdated.textContent = clockTime();
+  els.latencyAvg.textContent = `${Math.round(average)} ms avg`;
+  const density = state.density.length ? state.density.reduce((sum, value) => sum + value, 0) / state.density.length : 0;
+  els.densityAvg.textContent = `${density.toFixed(1)} avg`;
+  els.radarCount.textContent = plural(state.detections.length, "object");
+}
+
+function renderCharts() {
+  if (els.latencyChart.offsetParent === null) {
+    return;
   }
+  drawSparkline(els.latencyChart, state.latency);
+  drawBars(els.densityChart, state.density);
+  drawRadar(els.proximityRadar, state.detections, state.frameSize);
+}
+
+function announce() {
+  const now = performance.now();
+  const entries = Object.entries(state.classCounts).sort((a, b) => b[1] - a[1]);
+  const text = entries.length ? `In frame: ${entries.map(([label, count]) => `${count} ${label}`).join(", ")}.` : "Nothing detected.";
+  if (text !== state.srText && now - state.srAt > 4000) {
+    state.srText = text;
+    state.srAt = now;
+    els.srSummary.textContent = text;
+  }
+}
+
+function renderClassChips() {
+  const entries = Object.entries(state.classCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  els.nowEmpty.hidden = entries.length > 0;
+  if (!state.source) {
+    els.nowEmpty.textContent = "Nothing in frame yet.";
+  } else if (!entries.length) {
+    els.nowEmpty.textContent = settings.selectedClasses.length ? "Nothing from the class filter in frame." : "Nothing detected in frame.";
+  }
+  els.classChips.replaceChildren(
+    ...entries.map(([label, count]) =>
+      h("span", { class: "class-chip", style: { "--swatch": colorForLabel(label) } }, h("i"), label, h("b", {}, String(count))),
+    ),
+  );
+}
+
+function renderDetectionList() {
+  const rows = [...state.detections]
+    .sort((a, b) => b.confidence - a.confidence)
+    .map((detection) =>
+      h(
+        "li",
+        { style: { "--swatch": colorForLabel(detection.label) } },
+        h("i"),
+        h("span", {}, detection.label, detection.track_id ? h("span", { class: "track" }, `  track ${detection.track_id}`) : null),
+        h("span", { class: "confidence" }, `${Math.round(detection.confidence * 100)}%`),
+      ),
+    );
+  els.detectionList.replaceChildren(...rows);
+}
+
+function recordHistory(detections) {
+  if (!detections.length) {
+    return;
+  }
+  const labels = Object.entries(countLabels(detections))
+    .map(([label, count]) => (count > 1 ? `${count} ${label}` : label))
+    .join(", ");
+  if (state.history[0]?.labels === labels) {
+    return;
+  }
+  state.history = [{ at: clockTime(), iso: new Date().toISOString(), labels, count: detections.length }, ...state.history].slice(0, 50);
+  els.historyCount.textContent = String(state.history.length);
+  els.historyList.replaceChildren(
+    ...state.history.slice(0, 20).map((entry) => h("li", {}, h("time", {}, entry.at), h("span", {}, entry.labels))),
+  );
+  els.exportHistoryButton.disabled = false;
+  els.clearHistoryButton.disabled = false;
 }
 
 function updateSessionStats(session) {
@@ -858,1376 +1025,13 @@ function updateSessionStats(session) {
   }
   const roiAlerts = Math.max(state.session.roi_alerts || 0, session.roi_alerts || 0);
   state.session = { ...session, roi_alerts: roiAlerts };
-  elements.sessionFrames.textContent = String(session.frames_processed ?? 0);
-  elements.sessionDetections.textContent = String(session.detections_total ?? 0);
-  elements.sessionClasses.textContent = String(session.classes_seen?.length ?? 0);
-  elements.roiAlerts.textContent = String(state.session.roi_alerts ?? 0);
+  els.sessionFrames.textContent = String(session.frames_processed ?? 0);
+  els.sessionDetections.textContent = String(session.detections_total ?? 0);
+  els.sessionClasses.textContent = String(session.classes_seen?.length ?? 0);
+  els.roiAlerts.textContent = String(roiAlerts);
 }
 
-function recordRoiAlert(detection, zoneIndex) {
-  state.session.roi_alerts = (state.session.roi_alerts || 0) + 1;
-  elements.roiAlerts.textContent = String(state.session.roi_alerts);
-  elements.roiStatus.textContent = `Alert: ${detection.label} entered zone ${zoneIndex + 1}`;
-  if (!reducedMotion()) {
-    if (state.alertSound) {
-      playAlertTone();
-    }
-    playSpatialPing(detection, state.frameSize.width, { enabled: state.spatialAudio });
-  }
-  captureFilmstripFrame(detection.label);
-  if (state.mode === "server") {
-    ensureServerRuntime().sendRoiAlert();
-  } else {
-    recordBrowserRoiAlert();
-    const session = getBrowserSession();
-    state.session.roi_alerts = session.roi_alerts;
-    elements.roiAlerts.textContent = String(session.roi_alerts);
-  }
-}
-
-function checkRoiAlerts(detections) {
-  if (!state.rois.length) {
-    return;
-  }
-  const now = performance.now();
-  const occupied = state.rois.map(() => []);
-  for (const detection of detections) {
-    const box = detection.box;
-    const centerX = box.x + box.width / 2;
-    const centerY = box.y + box.height / 2;
-    state.rois.forEach((roi, index) => {
-      if (pointInRoi(centerX, centerY, roi, state.frameSize.width, state.frameSize.height)) {
-        occupied[index].push(detection);
-      }
-    });
-  }
-  occupied.forEach((inside, index) => {
-    const wasInside = Boolean(state.roiOccupied[index]);
-    const isInside = inside.length > 0;
-    const lastAlert = state.roiCooldown[index] || 0;
-    if (isInside && !wasInside && now - lastAlert >= ROI_COOLDOWN_MS) {
-      state.roiCooldown[index] = now;
-      recordRoiAlert(inside[0], index);
-    }
-    state.roiOccupied[index] = isInside;
-  });
-}
-
-function togglePause() {
-  if (!state.running && !state.stillMode) {
-    return;
-  }
-  state.paused = !state.paused;
-  elements.pauseButton.textContent = state.paused ? "Resume" : "Pause";
-  elements.lastUpdated.textContent = state.paused ? "Detection paused" : "Running";
-  elements.hudState.textContent = state.paused ? "Paused" : state.demoMode ? "Demo" : state.stillMode ? "Still" : "Live";
-}
-
-function applyTheme(light) {
-  document.documentElement.dataset.theme = light ? "light" : "dark";
-  elements.themeToggle.checked = light;
-  localStorage.setItem(THEME_KEY, light ? "light" : "dark");
-}
-
-function loadTheme() {
-  applyTheme(localStorage.getItem(THEME_KEY) === "light");
-}
-
-function fileToImage(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      URL.revokeObjectURL(url);
-      resolve(image);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error("Could not read image"));
-    };
-    image.src = url;
-  });
-}
-
-async function rerunStillDetection() {
-  if (!state.stillCanvas || state.paused) {
-    return;
-  }
-  if (state.mode === "browser") {
-    try {
-      const payload = await detectBrowser(state.stillCanvas, {
-        confidence: state.confidence,
-        classes: state.selectedClasses,
-      });
-      applyDetections(payload);
-      state.stillDirty = false;
-    } catch (error) {
-      elements.lastUpdated.textContent = error.message || "On-device detection failed";
-    }
-    return;
-  }
-  await new Promise((resolve) => {
-    state.stillCanvas.toBlob(async (blob) => {
-      try {
-        if (!blob) {
-          return;
-        }
-        const form = new FormData();
-        form.append("image", blob, "still.jpg");
-        const response = await fetch(apiUrl(`api/detect?confidence=${state.confidence}`), {
-          method: "POST",
-          body: form,
-        });
-        const payload = await response.json();
-        if (response.ok) {
-          applyDetections(payload);
-          state.stillDirty = false;
-        } else {
-          elements.lastUpdated.textContent = payload.detail || "Still-image detection failed.";
-        }
-      } finally {
-        resolve();
-      }
-    }, "image/jpeg", 0.92);
-  });
-}
-
-async function detectUploadedImages(fileList) {
-  const files = Array.from(fileList || []).filter(Boolean);
-  if (!files.length) {
-    return;
-  }
-  await resumeAudio();
-  const first = files[0];
-  try {
-    const image = await fileToImage(first);
-    showStillImage(image);
-  } catch {
-    elements.uploadDetectStatus.textContent = "Could not display the uploaded image.";
-    return;
-  }
-
-  if (state.mode === "browser") {
-    elements.uploadDetectStatus.textContent = files.length === 1 ? "Detecting on-device…" : `Detecting ${files.length} images on-device…`;
-    try {
-      await ensureBrowserModel();
-      let total = 0;
-      let firstPayload = null;
-      for (const file of files) {
-        const image = file === first ? state.stillCanvas : await fileToImage(file);
-        const payload = await detectBrowser(image, {
-          confidence: state.confidence,
-          classes: state.selectedClasses,
-        });
-        total += payload.detections.length;
-        if (!firstPayload) {
-          firstPayload = payload;
-        }
-      }
-      if (firstPayload) {
-        applyDetections(firstPayload);
-      }
-      elements.uploadDetectStatus.textContent =
-        files.length === 1
-          ? `Detected ${state.detections.length} object(s) in ${first.name}.`
-          : `Batch complete: ${total} detections across ${files.length} image(s).`;
-      state.stillDirty = false;
-    } catch {
-      elements.uploadDetectStatus.textContent = "On-device upload detection failed.";
-    }
-    return;
-  }
-
-  if (files.length === 1) {
-    const form = new FormData();
-    form.append("image", files[0]);
-    elements.uploadDetectStatus.textContent = "Detecting…";
-    try {
-      const response = await fetch(apiUrl(`api/detect?confidence=${state.confidence}`), {
-        method: "POST",
-        body: form,
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        elements.uploadDetectStatus.textContent = payload.detail || "Upload detection failed.";
-        return;
-      }
-      applyDetections(payload);
-      elements.uploadDetectStatus.textContent = `Detected ${state.detections.length} object(s) in ${files[0].name}.`;
-    } catch {
-      elements.uploadDetectStatus.textContent = "Upload detection failed.";
-    }
-    return;
-  }
-
-  const form = new FormData();
-  files.forEach((file) => form.append("images", file));
-  elements.uploadDetectStatus.textContent = `Detecting ${files.length} images…`;
-  try {
-    const response = await fetch(apiUrl(`api/detect/batch?confidence=${state.confidence}`), {
-      method: "POST",
-      body: form,
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      elements.uploadDetectStatus.textContent = payload.detail || "Batch upload detection failed.";
-      return;
-    }
-    const results = payload.results ?? [];
-    const total = results.reduce((sum, item) => sum + (item.detections?.length ?? 0), 0);
-    if (results[0]) {
-      applyDetections(results[0]);
-    }
-    elements.uploadDetectStatus.textContent = `Batch complete: ${total} detections across ${results.length} image(s).`;
-  } catch {
-    elements.uploadDetectStatus.textContent = "Batch upload detection failed.";
-  }
-}
-
-function recordLatency(value) {
-  if (typeof value !== "number") {
-    return;
-  }
-  state.latencySamples = [...state.latencySamples, value].slice(-24);
-  const average = state.latencySamples.reduce((sum, item) => sum + item, 0) / state.latencySamples.length;
-  elements.latencyAvg.textContent = `${Math.round(average)} ms avg`;
-  drawLatencyChart(elements.latencyChart, state.latencySamples);
-}
-
-function recordDensity(count) {
-  state.densitySamples = [...state.densitySamples, count].slice(-24);
-  const average = state.densitySamples.reduce((sum, item) => sum + item, 0) / state.densitySamples.length;
-  elements.densityAvg.textContent = `${average.toFixed(1)} avg`;
-  drawDensityChart(elements.densityChart, state.densitySamples);
-}
-
-function renderClassCounts() {
-  const entries = Object.entries(state.classCounts).sort((a, b) => b[1] - a[1]);
-  elements.classChips.replaceChildren(
-    ...entries.map(([label, count]) => {
-      const chip = document.createElement("span");
-      chip.className = "class-chip";
-      chip.style.borderColor = colorForLabel(label);
-      chip.textContent = `${label} ${count}`;
-      return chip;
-    }),
-  );
-}
-
-function renderClassChipPicker() {
-  const query = state.classQuery.trim().toLowerCase();
-  const classes = state.modelClasses.filter((label) => !query || label.toLowerCase().includes(query));
-  const selected = new Set(state.selectedClasses);
-  const chips = classes.map((label) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "class-chip-toggle";
-    button.textContent = label;
-    button.setAttribute("aria-pressed", selected.has(label) ? "true" : "false");
-    button.addEventListener("click", () => {
-      if (selected.has(label)) {
-        state.selectedClasses = state.selectedClasses.filter((item) => item !== label);
-      } else {
-        state.selectedClasses = [...state.selectedClasses, label];
-      }
-      sendDetectionConfig();
-      saveSettings();
-      renderClassChipPicker();
-      if (state.stillMode) {
-        state.stillDirty = true;
-        rerunStillDetection();
-      }
-    });
-    return button;
-  });
-  elements.classChipList.replaceChildren(...chips);
-}
-
-function applyClassPreset(name) {
-  const classes = CLASS_PRESETS[name];
-  if (!classes) {
-    return;
-  }
-  state.selectedClasses = [...classes];
-  sendDetectionConfig();
-  saveSettings();
-  renderClassChipPicker();
-  if (state.stillMode) {
-    state.stillDirty = true;
-    rerunStillDetection();
-  }
-}
-
-async function toggleFullscreen() {
-  const stage = elements.videoStage;
-  if (!document.fullscreenElement) {
-    await stage.requestFullscreen?.();
-  } else {
-    await document.exitFullscreen?.();
-  }
-}
-
-function startSyntheticDemo() {
-  revealStudio();
-  clearStageMedia();
-  const stream = createDemoStream();
-  state.stream = stream;
-  state.running = true;
-  elements.emptyState.classList.add("hidden");
-  elements.startCameraSide.disabled = true;
-  elements.stopCamera.disabled = false;
-  elements.snapshotButton.disabled = false;
-  elements.clearHistoryButton.disabled = false;
-  elements.exportHistoryButton.disabled = false;
-  elements.roiDrawButton.disabled = false;
-  elements.roiClearButton.disabled = false;
-  elements.pauseButton.disabled = false;
-  if (state.mode === "server") {
-    ensureServerRuntime().connect();
-  }
-  captureLoop();
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
-}
-
-function exportFilmstripGallery() {
-  if (!state.filmstrip.length) {
-    return;
-  }
-  const cards = state.filmstrip
-    .map(
-      (clip) => `
-        <figure style="margin:0;border:1px solid #303037;border-radius:8px;overflow:hidden;">
-          <img src="${clip.dataUrl}" alt="${escapeHtml(clip.label)}" style="width:100%;display:block;">
-          <figcaption style="padding:8px;font:12px sans-serif;color:#a9a49a;">${escapeHtml(clip.stamp)} · ${escapeHtml(clip.label)}</figcaption>
-        </figure>
-      `,
-    )
-    .join("");
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>ROI Alert Gallery</title></head><body style="background:#0b0b0d;color:#f5f1e8;font-family:sans-serif;padding:24px;"><h1>ROI Alert Gallery</h1><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">${cards}</div></body></html>`;
-  const link = document.createElement("a");
-  link.download = `roi-gallery-${Date.now()}.html`;
-  link.href = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-  link.click();
-  URL.revokeObjectURL(link.href);
-}
-
-function captureFilmstripFrame(label) {
-  const source = currentSource();
-  if (!source || !lastFitted) {
-    return;
-  }
-  const rect = elements.videoStage.getBoundingClientRect();
-  const canvas = snapshotComposite(source, elements.overlay, rect.width, rect.height, lastFitted);
-  const entry = {
-    label,
-    dataUrl: canvas.toDataURL("image/jpeg", 0.65),
-    stamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-  };
-  state.filmstrip = [entry, ...state.filmstrip].slice(0, 8);
-  renderFilmstrip();
-}
-
-function renderFilmstrip() {
-  elements.filmstripCount.textContent = `${state.filmstrip.length} clips`;
-  elements.exportFilmstrip.disabled = state.filmstrip.length === 0;
-  elements.alertFilmstrip.replaceChildren(
-    ...state.filmstrip.map((clip) => {
-      const card = document.createElement("figure");
-      card.className = "filmstrip-card";
-      const image = document.createElement("img");
-      image.src = clip.dataUrl;
-      image.alt = `ROI alert ${clip.label}`;
-      const caption = document.createElement("figcaption");
-      caption.textContent = `${clip.stamp} · ${clip.label}`;
-      card.append(image, caption);
-      return card;
-    }),
-  );
-}
-
-function exportHistory() {
-  const blob = new Blob([JSON.stringify(state.history, null, 2)], { type: "application/json" });
-  const link = document.createElement("a");
-  link.download = `detection-history-${Date.now()}.json`;
-  link.href = URL.createObjectURL(blob);
-  link.click();
-  URL.revokeObjectURL(link.href);
-}
-
-function saveSettings() {
-  localStorage.setItem(
-    SETTINGS_KEY,
-    JSON.stringify({
-      confidence: state.confidence,
-      targetFps: state.targetFps,
-      processingWidth: state.processingWidth,
-      showLabels: state.showLabels,
-      showHeatmap: state.showHeatmap,
-      selectedClasses: state.selectedClasses,
-      showTrails: state.showTrails,
-      alertSound: state.alertSound,
-      privacyMode: state.privacyMode,
-      sonify: state.sonify,
-      ghostMode: state.ghostMode,
-      spatialAudio: state.spatialAudio,
-      privacyBlur: state.privacyBlur,
-      ghostOpacity: state.ghostOpacity,
-      cornerBoxes: state.cornerBoxes,
-      studioEffect: state.studioEffect,
-      vanishMode: state.vanishMode,
-      studioPad: state.studioPad,
-      backgroundColor: state.backgroundColor,
-      grade: state.grade,
-      mirror: state.mirror,
-      autoFrame: state.autoFrame,
-      nameplate: state.nameplate,
-      burnHud: state.burnHud,
-    }),
-  );
-}
-
-function loadSettings() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
-    if (saved.confidence != null) {
-      state.confidence = clampConfidence(saved.confidence);
-      elements.confidenceRange.value = String(state.confidence);
-      elements.confidenceValue.textContent = `${Math.round(state.confidence * 100)}%`;
-    }
-    if (saved.targetFps != null) {
-      state.targetFps = saved.targetFps;
-      elements.fpsRange.value = String(saved.targetFps);
-      elements.fpsValue.textContent = `${saved.targetFps} fps`;
-    }
-    if (saved.processingWidth != null) {
-      state.processingWidth = saved.processingWidth;
-      elements.widthRange.value = String(saved.processingWidth);
-      elements.widthValue.textContent = `${saved.processingWidth} px`;
-    }
-    if (saved.showLabels != null) {
-      state.showLabels = saved.showLabels;
-      elements.labelToggle.checked = saved.showLabels;
-    }
-    if (saved.showHeatmap != null) {
-      state.showHeatmap = saved.showHeatmap;
-      elements.heatmapToggle.checked = saved.showHeatmap;
-    }
-    if (saved.selectedClasses?.length) {
-      state.selectedClasses = saved.selectedClasses;
-    }
-    if (saved.showTrails != null) {
-      state.showTrails = saved.showTrails;
-      elements.trailToggle.checked = saved.showTrails;
-    }
-    if (saved.alertSound != null) {
-      state.alertSound = saved.alertSound;
-      elements.alertSoundToggle.checked = saved.alertSound;
-    }
-    if (saved.privacyMode != null) {
-      state.privacyMode = saved.privacyMode;
-      elements.privacyToggle.checked = saved.privacyMode;
-    }
-    if (saved.sonify != null) {
-      state.sonify = saved.sonify;
-      elements.sonifyToggle.checked = saved.sonify;
-    }
-    if (saved.ghostMode != null) {
-      state.ghostMode = saved.ghostMode;
-      elements.ghostToggle.checked = saved.ghostMode;
-    }
-    if (saved.spatialAudio != null) {
-      state.spatialAudio = saved.spatialAudio;
-      elements.spatialAudioToggle.checked = saved.spatialAudio;
-    }
-    if (saved.privacyBlur != null) {
-      state.privacyBlur = saved.privacyBlur;
-      elements.privacyBlurRange.value = String(saved.privacyBlur);
-      elements.privacyBlurValue.textContent = `${saved.privacyBlur}px`;
-    }
-    if (saved.ghostOpacity != null) {
-      state.ghostOpacity = saved.ghostOpacity;
-      elements.ghostOpacityRange.value = String(saved.ghostOpacity);
-      elements.ghostOpacityValue.textContent = `${Math.round(saved.ghostOpacity * 100)}%`;
-    }
-    if (saved.cornerBoxes != null) {
-      state.cornerBoxes = saved.cornerBoxes;
-      elements.cornerBoxToggle.checked = saved.cornerBoxes;
-    }
-    if (saved.studioEffect) {
-      state.studioEffect = saved.studioEffect;
-    }
-    if (saved.vanishMode) {
-      state.vanishMode = saved.vanishMode;
-      elements.vanishMode.value = saved.vanishMode;
-    }
-    if (saved.studioPad != null) {
-      state.studioPad = Number(saved.studioPad);
-      elements.padRange.value = String(state.studioPad);
-      elements.padValue.textContent = `${Math.round(state.studioPad * 100)}%`;
-    }
-    if (saved.backgroundColor) {
-      state.backgroundColor = saved.backgroundColor;
-      elements.backgroundColor.value = saved.backgroundColor;
-    }
-    if (saved.grade) {
-      state.grade = saved.grade;
-      elements.gradeSelect.value = saved.grade;
-    }
-    if (saved.mirror != null) {
-      state.mirror = saved.mirror === true;
-      elements.mirrorToggle.checked = state.mirror;
-    }
-    if (saved.autoFrame != null) {
-      state.autoFrame = saved.autoFrame === true;
-      elements.autoFrameToggle.checked = state.autoFrame;
-    }
-    if (typeof saved.nameplate === "string") {
-      state.nameplate = cleanNameplate(saved.nameplate);
-      elements.nameplateInput.value = state.nameplate;
-    }
-    if (saved.burnHud != null) {
-      state.burnHud = saved.burnHud;
-      elements.burnHudToggle.checked = saved.burnHud;
-    }
-    markStudioEffect(state.studioEffect);
-  } catch {
-    // ignore invalid saved settings
-  }
-}
-
-function recordHistory(payload) {
-  if (!payload.detections?.length) {
-    return;
-  }
-  const stamp = new Date().toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  const labels = payload.detections.map((item) => item.label).join(", ");
-  state.history = [{ stamp, labels, count: payload.detections.length }, ...state.history].slice(0, 12);
-  renderHistory();
-}
-
-function renderHistory() {
-  elements.historyCount.textContent = `${state.history.length} events`;
-  elements.historyList.replaceChildren(
-    ...state.history.map((entry) => {
-      const row = document.createElement("li");
-      const time = document.createElement("span");
-      const detail = document.createElement("span");
-      time.className = "history-time";
-      time.textContent = entry.stamp;
-      detail.className = "history-detail";
-      detail.textContent = `${entry.count} objects · ${entry.labels}`;
-      row.append(time, detail);
-      return row;
-    }),
-  );
-}
-
-function captureSnapshot() {
-  const source = currentSource();
-  if (!source) {
-    return;
-  }
-  const rect = elements.videoStage.getBoundingClientRect();
-  const fitted =
-    lastFitted ||
-    letterbox(rect.width, rect.height, state.frameSize.width || 1, state.frameSize.height || 1);
-  const canvas = snapshotComposite(source, elements.overlay, rect.width, rect.height, fitted);
-  const link = document.createElement("a");
-  link.download = `detection-snapshot-${Date.now()}.png`;
-  link.href = canvas.toDataURL("image/png");
-  link.click();
-}
-
-function trackClientFps() {
-  state.sentFrames += 1;
-  const elapsed = performance.now() - state.fpsStartedAt;
-  if (elapsed >= 1000) {
-    elements.streamFps.textContent = `${Math.round((state.sentFrames * 1000) / elapsed)} fps`;
-    state.sentFrames = 0;
-    state.fpsStartedAt = performance.now();
-  }
-}
-
-function captureLoop() {
-  if (!state.running) {
-    return;
-  }
-  const delay = 1000 / Math.max(1, state.targetFps);
-  window.setTimeout(captureLoop, delay);
-
-  if (state.paused || state.inFlight) {
-    return;
-  }
-
-  const canvas = grabFrame();
-  if (!canvas) {
-    return;
-  }
-
-  if (state.mode === "server") {
-    const runtime = ensureServerRuntime();
-    if (!runtime.isOpen || runtime.busy) {
-      return;
-    }
-    state.inFlight = true;
-    canvas.toBlob(
-      async (blob) => {
-        if (!blob) {
-          state.inFlight = false;
-          return;
-        }
-        const sent = runtime.sendFrame(await blob.arrayBuffer());
-        state.inFlight = false;
-        if (sent) {
-          trackClientFps();
-        }
-      },
-      "image/jpeg",
-      0.72,
-    );
-    return;
-  }
-
-  if (!isBrowserModelReady()) {
-    return;
-  }
-  state.inFlight = true;
-  detectBrowser(canvas, {
-    confidence: state.confidence,
-    classes: state.selectedClasses,
-  })
-    .then((payload) => {
-      applyDetections(payload);
-      trackClientFps();
-    })
-    .catch((error) => {
-      elements.lastUpdated.textContent = error.message || "On-device detection failed";
-    })
-    .finally(() => {
-      state.inFlight = false;
-    });
-}
-
-function renderDetectionList() {
-  const rows = state.detections
-    .slice()
-    .sort((a, b) => b.confidence - a.confidence)
-    .map((detection) => {
-      const row = document.createElement("li");
-      const swatch = document.createElement("span");
-      const label = document.createElement("span");
-      const confidence = document.createElement("span");
-      swatch.className = "swatch";
-      swatch.style.background = colorForLabel(detection.label);
-      label.className = "detection-label";
-      label.textContent = detection.track_id ? `#${detection.track_id} ${detection.label}` : detection.label;
-      confidence.className = "confidence";
-      confidence.textContent = `${Math.round(detection.confidence * 100)}%`;
-      row.append(swatch, label, confidence);
-      return row;
-    });
-  elements.detectionList.replaceChildren(...rows);
-}
-
-function overlayOptions() {
-  return {
-    showLabels: state.showLabels,
-    showTrails: state.showTrails && !reducedMotion(),
-    cornerBoxes: state.cornerBoxes,
-    privacyMode: state.privacyMode,
-    privacyBlur: state.privacyBlur,
-    ghostMode: state.ghostMode && !reducedMotion(),
-    ghostOpacity: state.ghostOpacity,
-  };
-}
-
-function studioOutputWanted() {
-  return (
-    state.studioEffect !== "none" ||
-    state.grade !== "none" ||
-    state.mirror ||
-    state.autoFrame ||
-    cleanNameplate(state.nameplate) !== "" ||
-    state.virtualCam ||
-    state.cleanFeed ||
-    state.recorder ||
-    state.boothRunning
-  );
-}
-
-function ensurePlate() {
-  if (!state.plate) {
-    state.plate = { canvas: document.createElement("canvas"), seeded: false };
-  }
-  return state.plate;
-}
-
-function renderStudio() {
-  const canvas = elements.studioCanvas;
-  const source = currentSource();
-  const show = Boolean(source) && studioOutputWanted() && (state.running || state.stillMode || state.demoMode);
-  canvas.classList.toggle("hidden", !show);
-  elements.videoStage.classList.toggle("studio-live", show);
-  if (!show) {
-    return null;
-  }
-  const size = sourceSize(source);
-  const width = Math.min(STUDIO_MAX_WIDTH, size.width || 640);
-  const height = Math.max(1, Math.round(width * ((size.height || 360) / (size.width || 640))));
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-  const plate = ensurePlate();
-  const frameSize = state.frameSize.width ? state.frameSize : { width, height };
-  const boxes = effectTargets(state.detections, frameSize, { width, height }, {
-    pad: state.studioPad,
-    vanishMode: state.vanishMode,
-    selectedClasses: state.selectedClasses,
-  });
-  state.emptyPlateFrames = boxes.length === 0 ? state.emptyPlateFrames + 1 : 0;
-  const autoSeed = !plate.seeded && state.emptyPlateFrames >= 8;
-  learnPlate(plate, source, width, height, boxes, state.capturePlate || autoSeed);
-  state.capturePlate = false;
-  const hudText = state.burnHud ? `${state.detections.length} detected` : "";
-  const rendered = compositeFrame(canvas.getContext("2d"), source, width, height, {
-    effect: state.studioEffect,
-    detections: state.detections,
-    frameSize,
-    plate,
-    pad: state.studioPad,
-    vanishMode: state.vanishMode,
-    selectedClasses: state.selectedClasses,
-    backgroundColor: state.backgroundColor,
-    grade: state.grade,
-    mirror: state.mirror,
-    autoFrame: state.autoFrame,
-    nameplate: state.nameplate,
-    burnHud: state.burnHud,
-    hudText,
-  });
-  if (state.studioEffect === "disappear") {
-    if (elements.invisibleChip) {
-      elements.invisibleChip.textContent = rendered.plateReady ? "Invisible" : "Learning plate";
-    }
-    elements.studioNote.textContent = rendered.plateReady
-      ? "Disappear is using the captured background. Move, and the room stays behind you."
-      : "Blur vanish is on. Step out of frame, or press Capture plate, for a solid background.";
-  }
-  publishStudio(canvas);
-  return canvas;
-}
-
-function publishStudio(canvas) {
-  const now = performance.now();
-  if (state.cleanFeed && state.studioChannel && now - state.cleanFeedSentAt > 70) {
-    state.cleanFeedSentAt = now;
-    canvas.toBlob((blob) => {
-      if (blob && state.studioChannel) {
-        state.studioChannel.postMessage(blob);
-      }
-    }, "image/jpeg", 0.72);
-  }
-  if (!state.virtualCam || !state.serverAvailable || state.virtualCamBusy || now - state.virtualCamSentAt < 90) {
-    return;
-  }
-  state.virtualCamSentAt = now;
-  state.virtualCamBusy = true;
-  canvas.toBlob(async (blob) => {
-    if (!blob) {
-      state.virtualCamBusy = false;
-      return;
-    }
-    try {
-      const response = await fetch(apiUrl("/api/virtualcam/frame"), {
-        method: "POST",
-        headers: { "content-type": "image/jpeg" },
-        body: blob,
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.detail || "Bridge rejected the frame");
-      }
-      elements.virtualCamStatus.textContent = payload.available
-        ? `OBS Virtual Camera live · ${payload.frames} frames. Pick it in Zoom, Photo Booth, FaceTime, Meet, Teams, Discord, or QuickTime.`
-        : `Bridge has ${payload.frames} frames. Install OBS + pyvirtualcam to appear as a camera. MJPEG: ${payload.mjpeg_path}`;
-    } catch (error) {
-      elements.virtualCamStatus.textContent = error.message || "Virtual camera bridge unreachable";
-    } finally {
-      state.virtualCamBusy = false;
-    }
-  }, "image/jpeg", 0.8);
-}
-
-function markStudioEffect(effect) {
-  document.querySelectorAll("[data-effect]").forEach((button) => {
-    button.setAttribute("aria-pressed", button.dataset.effect === effect ? "true" : "false");
-  });
-  elements.invisibleChip?.classList.toggle("hidden", effect !== "disappear");
-}
-
-function revealStudio() {
-  elements.homeScreen?.classList.add("hidden");
-  elements.studioWorkspace?.classList.remove("is-parked");
-}
-
-function showHome() {
-  elements.homeScreen?.classList.remove("hidden");
-  elements.studioWorkspace?.classList.add("is-parked");
-}
-
-function markLook(name) {
-  document.querySelectorAll("[data-look]").forEach((button) => {
-    button.setAttribute("aria-pressed", button.dataset.look === name ? "true" : "false");
-  });
-}
-
-function setStudioEffect(effect) {
-  state.studioEffect = effect;
-  markStudioEffect(effect);
-  markLook("");
-  if (effect === "disappear") {
-    elements.studioNote.textContent =
-      "Invisible is on. People leave the outgoing picture. Press B once the room is empty to learn the background.";
-  } else {
-    elements.studioNote.textContent =
-      "Effects are burned into the clean feed, the recording, and the virtual camera. D toggles invisible.";
-  }
-  saveSettings();
-}
-
-function applyLook(name) {
-  const looks = {
-    call: {
-      effect: "disappear",
-      grade: "none",
-      mirror: false,
-      vanishMode: "people",
-      note: "Call look: people leave the picture.",
-    },
-    booth: {
-      effect: "portrait",
-      grade: "warm",
-      note: "Booth look: a warm portrait.",
-    },
-    plain: {
-      effect: "none",
-      grade: "none",
-      mirror: false,
-      note: "Plain look: the picture is unchanged.",
-    },
-  };
-  const look = looks[name];
-  if (!look) {
-    return;
-  }
-  if (look.vanishMode) {
-    state.vanishMode = look.vanishMode;
-    if (elements.vanishMode) {
-      elements.vanishMode.value = look.vanishMode;
-    }
-  }
-  state.grade = look.grade;
-  if (elements.gradeSelect) {
-    elements.gradeSelect.value = look.grade;
-  }
-  if (Object.hasOwn(look, "mirror")) {
-    state.mirror = look.mirror;
-    if (elements.mirrorToggle) {
-      elements.mirrorToggle.checked = look.mirror;
-    }
-  }
-  setStudioEffect(look.effect);
-  elements.studioNote.textContent = look.note;
-  markLook(name);
-}
-
-function goInvisible() {
-  state.vanishMode = "people";
-  if (elements.vanishMode) {
-    elements.vanishMode.value = "people";
-  }
-  setStudioEffect("disappear");
-  revealStudio();
-  if (!state.running && !state.stillMode && !state.demoMode) {
-    startCamera().catch((error) => {
-      elements.lastUpdated.textContent = error.message || "Could not start the camera.";
-    });
-  }
-}
-
-function renderVideoAppGuide(id = state.videoApp) {
-  state.videoApp = id;
-  document.querySelectorAll("[data-video-app]").forEach((button) => {
-    button.setAttribute("aria-pressed", button.dataset.videoApp === id ? "true" : "false");
-  });
-  const guide = videoAppGuide(id);
-  elements.videoAppGuide.replaceChildren();
-  const title = document.createElement("strong");
-  title.textContent = guide.name;
-  const camera = document.createElement("p");
-  camera.textContent = `Camera: ${guide.camera}`;
-  const windowShare = document.createElement("p");
-  windowShare.textContent = `Window: ${guide.window}`;
-  const list = document.createElement("ol");
-  for (const step of guide.setup) {
-    const item = document.createElement("li");
-    item.textContent = step;
-    list.append(item);
-  }
-  elements.videoAppGuide.append(title, camera, windowShare, list);
-}
-
-function cloneFrame(source) {
-  const canvas = document.createElement("canvas");
-  canvas.width = source.width || source.videoWidth || 640;
-  canvas.height = source.height || source.videoHeight || 360;
-  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
-  return canvas;
-}
-
-function wait(ms) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
-
-async function startPhotoBooth() {
-  if (state.boothRunning) {
-    return;
-  }
-  const source = currentSource();
-  if (!source) {
-    elements.studioNote.textContent = "Start the camera or a sample scene before the photo booth.";
-    return;
-  }
-  state.boothRunning = true;
-  elements.photoBoothButton.disabled = true;
-  const ticks = reducedMotion() ? ["1"] : ["3", "2", "1"];
-  for (const tick of ticks) {
-    elements.boothCountdown.textContent = tick;
-    elements.boothCountdown.classList.remove("hidden");
-    await wait(reducedMotion() ? 160 : 700);
-  }
-  elements.boothCountdown.classList.add("hidden");
-  const shots = [];
-  for (let index = 0; index < 4; index += 1) {
-    const live = elements.studioCanvas.classList.contains("hidden") ? source : elements.studioCanvas;
-    shots.push(cloneFrame(live));
-    elements.boothCountdown.textContent = String(index + 1);
-    elements.boothCountdown.classList.remove("hidden");
-    await wait(reducedMotion() ? 90 : 280);
-    elements.boothCountdown.classList.add("hidden");
-    if (index < 3) {
-      await wait(reducedMotion() ? 80 : 320);
-    }
-  }
-  state.boothStrip = buildPhotoStrip(shots, {
-    caption: `DETECTION BOOTH · ${new Date().toLocaleString()}`,
-  });
-  elements.boothPreview.src = state.boothStrip.toDataURL("image/png");
-  elements.boothPreview.classList.remove("hidden");
-  elements.downloadBooth.disabled = false;
-  state.boothRunning = false;
-  elements.photoBoothButton.disabled = false;
-}
-
-function downloadBoothStrip() {
-  if (!state.boothStrip) {
-    return;
-  }
-  const link = document.createElement("a");
-  link.download = `photo-booth-${Date.now()}.png`;
-  link.href = state.boothStrip.toDataURL("image/png");
-  link.click();
-}
-
-function openCleanFeed() {
-  if (!state.studioChannel && "BroadcastChannel" in window) {
-    state.studioChannel = new BroadcastChannel("detection-studio");
-  }
-  state.cleanFeed = true;
-  const popup = window.open("static/studio.html", "detection-clean-feed", "width=960,height=540");
-  if (!popup) {
-    elements.virtualCamStatus.textContent = "Allow pop-ups to open the clean feed window.";
-  }
-}
-
-function toggleRecording() {
-  if (state.recorder) {
-    state.recorder.stop();
-    return;
-  }
-  const canvas = elements.studioCanvas;
-  if (!canvas.captureStream) {
-    elements.studioNote.textContent = "This browser cannot record a canvas stream.";
-    return;
-  }
-  state.cleanFeed = state.cleanFeed || state.studioEffect !== "none";
-  const stream = canvas.captureStream(30);
-  const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
-    ? "video/webm;codecs=vp9"
-    : "video/webm";
-  const recorder = new MediaRecorder(stream, { mimeType });
-  state.recordChunks = [];
-  recorder.ondataavailable = (event) => {
-    if (event.data?.size) {
-      state.recordChunks.push(event.data);
-    }
-  };
-  recorder.onstop = () => {
-    const blob = new Blob(state.recordChunks, { type: "video/webm" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `detection-studio-${Date.now()}.webm`;
-    link.click();
-    state.recorder = null;
-    elements.recordButton.textContent = "Record clip";
-  };
-  recorder.start();
-  state.recorder = recorder;
-  elements.recordButton.textContent = "Stop recording";
-}
-
-function renderStage() {
-  renderStudio();
-  const drawn = drawOverlay({
-    overlay: elements.overlay,
-    stage: elements.videoStage,
-    detections: state.detections,
-    ghosts: state.ghostDetections,
-    rois: state.rois,
-    roiPreview: state.roiPreview,
-    frameSize: state.frameSize,
-    options: overlayOptions(),
-    source: currentSource(),
-  });
-  lastFitted = drawn.fitted;
-  drawHeatmap(elements.heatmap, elements.videoStage, state.heatmapCells, state.frameSize, state.showHeatmap);
-  drawProximityRadar(elements.proximityRadar, state.detections, state.frameSize);
-  elements.radarCount.textContent = `${state.detections.length} blips`;
-  requestAnimationFrame(renderStage);
-}
-
-function isTypingTarget(target) {
-  const tag = target?.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable;
-}
-
-document.querySelectorAll("[data-sample]").forEach((button) => {
-  button.addEventListener("click", () => loadSampleScene(button.dataset.sample));
-});
-document.querySelectorAll("[data-preset]").forEach((button) => {
-  button.addEventListener("click", () => applyClassPreset(button.dataset.preset));
-});
-elements.fullscreenButton?.addEventListener("click", () => {
-  toggleFullscreen().catch(() => {});
-});
-elements.syntheticDemoButton?.addEventListener("click", startSyntheticDemo);
-
-document.querySelectorAll("[data-start-camera]").forEach((button) => {
-  button.addEventListener("click", () => {
-    startCamera().catch((error) => {
-      elements.lastUpdated.textContent = error.message;
-    });
-  });
-});
-document.querySelectorAll("[data-go-invisible]").forEach((button) => {
-  button.addEventListener("click", () => {
-    goInvisible();
-  });
-});
-elements.startCameraSide.addEventListener("click", () => {
-  startCamera().catch((error) => {
-    elements.lastUpdated.textContent = error.message;
-  });
-});
-elements.stopCamera.addEventListener("click", stopCamera);
-
-elements.fpsRange.addEventListener("input", (event) => {
-  state.targetFps = Number(event.target.value);
-  elements.fpsValue.textContent = `${state.targetFps} fps`;
-});
-elements.widthRange.addEventListener("input", (event) => {
-  state.processingWidth = Number(event.target.value);
-  elements.widthValue.textContent = `${state.processingWidth} px`;
-});
-elements.labelToggle.addEventListener("change", (event) => {
-  state.showLabels = event.target.checked;
-});
-elements.confidenceRange.addEventListener("input", (event) => {
-  state.confidence = clampConfidence(event.target.value);
-  elements.confidenceValue.textContent = `${Math.round(state.confidence * 100)}%`;
-  sendDetectionConfig();
-  saveSettings();
-  if (state.stillMode) {
-    state.stillDirty = true;
-    rerunStillDetection();
-  }
-});
-elements.classSearch.addEventListener("input", (event) => {
-  state.classQuery = event.target.value;
-  renderClassChipPicker();
-});
-elements.heatmapToggle.addEventListener("change", (event) => {
-  state.showHeatmap = event.target.checked;
-  saveSettings();
-});
-elements.cornerBoxToggle.addEventListener("change", (event) => {
-  state.cornerBoxes = event.target.checked;
-  saveSettings();
-});
-elements.uploadDetect.addEventListener("change", (event) => {
-  detectUploadedImages(event.target.files);
-});
-elements.roiDrawButton.addEventListener("click", () => {
-  if (state.rois.length >= MAX_ROIS) {
-    elements.roiStatus.textContent = `Maximum ${MAX_ROIS} zones reached.`;
-    return;
-  }
-  setDrawing(true);
-  elements.roiStatus.textContent = "Click and drag on the video to add a zone. Esc cancels.";
-});
-elements.roiClearButton.addEventListener("click", () => {
-  state.rois = [];
-  state.roiOccupied = [];
-  state.roiCooldown = [];
-  setDrawing(false);
-  elements.roiStatus.textContent = "No ROI zones set (max 3).";
-});
-elements.pauseButton.addEventListener("click", togglePause);
-elements.trailToggle.addEventListener("change", (event) => {
-  state.showTrails = event.target.checked;
-  saveSettings();
-});
-elements.alertSoundToggle.addEventListener("change", (event) => {
-  state.alertSound = event.target.checked;
-  saveSettings();
-});
-elements.themeToggle.addEventListener("change", (event) => {
-  applyTheme(event.target.checked);
-});
-elements.privacyToggle.addEventListener("change", (event) => {
-  state.privacyMode = event.target.checked;
-  saveSettings();
-});
-elements.sonifyToggle.addEventListener("change", (event) => {
-  state.sonify = event.target.checked;
-  saveSettings();
-});
-elements.ghostToggle.addEventListener("change", (event) => {
-  state.ghostMode = event.target.checked;
-  saveSettings();
-});
-elements.spatialAudioToggle.addEventListener("change", (event) => {
-  state.spatialAudio = event.target.checked;
-  saveSettings();
-});
-elements.privacyBlurRange.addEventListener("input", (event) => {
-  state.privacyBlur = Number(event.target.value);
-  elements.privacyBlurValue.textContent = `${state.privacyBlur}px`;
-  saveSettings();
-});
-elements.ghostOpacityRange.addEventListener("input", (event) => {
-  state.ghostOpacity = Number(event.target.value);
-  elements.ghostOpacityValue.textContent = `${Math.round(state.ghostOpacity * 100)}%`;
-  saveSettings();
-});
-elements.exportFilmstrip.addEventListener("click", exportFilmstripGallery);
-elements.snapshotButton.addEventListener("click", captureSnapshot);
-elements.exportHistoryButton.addEventListener("click", exportHistory);
-elements.clearHistoryButton.addEventListener("click", () => {
-  state.history = [];
-  renderHistory();
-});
-elements.modeServer.addEventListener("click", () => {
-  setMode("server", { user: true });
-});
-elements.modeBrowser.addEventListener("click", () => {
-  setMode("browser", { user: true });
-});
-
-elements.videoStage.addEventListener("pointerdown", (event) => {
-  if (!state.roiDrawing || event.target.closest("button")) {
-    return;
-  }
-  event.preventDefault();
-  state.roiStart = pointerToNormalized(event, elements.videoStage, state.frameSize);
-  state.roiPreview = { x: state.roiStart.x, y: state.roiStart.y, width: 0, height: 0 };
-  elements.videoStage.setPointerCapture(event.pointerId);
-});
-elements.videoStage.addEventListener("pointermove", (event) => {
-  if (!state.roiDrawing || !state.roiStart) {
-    return;
-  }
-  const current = pointerToNormalized(event, elements.videoStage, state.frameSize);
-  state.roiPreview = {
-    x: Math.min(state.roiStart.x, current.x),
-    y: Math.min(state.roiStart.y, current.y),
-    width: Math.abs(current.x - state.roiStart.x),
-    height: Math.abs(current.y - state.roiStart.y),
-  };
-});
-elements.videoStage.addEventListener("pointerup", (event) => {
-  if (!state.roiDrawing || !state.roiStart) {
-    return;
-  }
-  const end = pointerToNormalized(event, elements.videoStage, state.frameSize);
-  const roi = {
-    x: Math.min(state.roiStart.x, end.x),
-    y: Math.min(state.roiStart.y, end.y),
-    width: Math.abs(end.x - state.roiStart.x),
-    height: Math.abs(end.y - state.roiStart.y),
-  };
-  if (roi.width > 0.02 && roi.height > 0.02 && state.rois.length < MAX_ROIS) {
-    state.rois.push(roi);
-    state.roiOccupied[state.rois.length - 1] = false;
-    state.roiCooldown[state.rois.length - 1] = 0;
-    elements.roiStatus.textContent = `${state.rois.length} zone(s) armed.`;
-  }
-  setDrawing(false);
-});
-
-elements.fpsRange.addEventListener("change", saveSettings);
-elements.widthRange.addEventListener("change", saveSettings);
-elements.labelToggle.addEventListener("change", saveSettings);
-
-window.addEventListener("keydown", (event) => {
-  if (isTypingTarget(event.target)) {
-    return;
-  }
-  if (event.code === "Space") {
-    event.preventDefault();
-    togglePause();
-  } else if (event.key === "s" || event.key === "S") {
-    event.preventDefault();
-    captureSnapshot();
-  } else if (event.key === "Escape") {
-    setDrawing(false);
-    elements.roiStatus.textContent = state.rois.length
-      ? `${state.rois.length} zone(s) armed.`
-      : "No ROI zones set (max 3).";
-  } else if (event.key === "f" || event.key === "F") {
-    event.preventDefault();
-    toggleFullscreen().catch(() => {});
-  } else if (event.key === "d" || event.key === "D") {
-    event.preventDefault();
-    setStudioEffect(state.studioEffect === "disappear" ? "none" : "disappear");
-  } else if (event.key === "b" || event.key === "B") {
-    event.preventDefault();
-    state.capturePlate = true;
-    elements.studioNote.textContent = "Background plate captured from this frame.";
-  } else if (event.key === "p" || event.key === "P") {
-    event.preventDefault();
-    startPhotoBooth().catch(() => {});
-  } else if (event.key === "m" || event.key === "M") {
-    event.preventDefault();
-    state.mirror = !state.mirror;
-    elements.mirrorToggle.checked = state.mirror;
-    elements.studioNote.textContent = state.mirror
-      ? "Mirror is on. The outgoing picture is flipped left to right."
-      : "Mirror is off.";
-    markLook("");
-    saveSettings();
-  }
-});
-
-document.querySelectorAll("[data-effect]").forEach((button) => {
-  button.addEventListener("click", () => setStudioEffect(button.dataset.effect));
-});
-document.querySelectorAll("[data-look]").forEach((button) => {
-  button.addEventListener("click", () => applyLook(button.dataset.look));
-});
-document.querySelectorAll("[data-video-app]").forEach((button) => {
-  button.addEventListener("click", () => renderVideoAppGuide(button.dataset.videoApp));
-});
-elements.vanishMode.addEventListener("change", (event) => {
-  state.vanishMode = event.target.value;
-  markLook("");
-  saveSettings();
-});
-elements.padRange.addEventListener("input", (event) => {
-  state.studioPad = Number(event.target.value);
-  elements.padValue.textContent = `${Math.round(state.studioPad * 100)}%`;
-  saveSettings();
-});
-elements.backgroundColor.addEventListener("input", (event) => {
-  state.backgroundColor = event.target.value;
-  saveSettings();
-});
-elements.gradeSelect.addEventListener("change", (event) => {
-  state.grade = event.target.value;
-  markLook("");
-  saveSettings();
-});
-elements.mirrorToggle.addEventListener("change", (event) => {
-  state.mirror = event.target.checked;
-  markLook("");
-  saveSettings();
-});
-elements.autoFrameToggle.addEventListener("change", (event) => {
-  state.autoFrame = event.target.checked;
-  elements.studioNote.textContent = state.autoFrame
-    ? "Auto frame zooms the outgoing picture toward people."
-    : "Auto frame is off.";
-  saveSettings();
-});
-elements.nameplateInput.addEventListener("input", (event) => {
-  state.nameplate = cleanNameplate(event.target.value);
-  saveSettings();
-});
-elements.burnHudToggle.addEventListener("change", (event) => {
-  state.burnHud = event.target.checked;
-  saveSettings();
-});
-elements.capturePlateButton.addEventListener("click", () => {
-  state.capturePlate = true;
-  elements.studioNote.textContent = "Hold still out of frame if you can. The next studio frame becomes the background.";
-});
-elements.photoBoothButton.addEventListener("click", () => {
-  startPhotoBooth().catch(() => {});
-});
-elements.cleanFeedButton.addEventListener("click", openCleanFeed);
-elements.recordButton.addEventListener("click", toggleRecording);
-elements.downloadBooth.addEventListener("click", downloadBoothStrip);
-elements.virtualCamToggle.addEventListener("change", (event) => {
-  state.virtualCam = event.target.checked;
-  elements.virtualCamStatus.textContent = state.virtualCam
-    ? "Sending the studio picture to the local bridge…"
-    : "Virtual camera off.";
-});
-
-window.addEventListener("pointerdown", () => {
-  resumeAudio();
-}, { once: true });
-
-window.addEventListener("beforeunload", stopCamera);
-
-async function boot() {
-  loadTheme();
-  loadSettings();
-  renderVideoAppGuide(state.videoApp);
-  markStudioEffect(state.studioEffect);
-  state.serverAvailable = await probeHealth();
-  await setMode(state.serverAvailable ? "server" : "browser");
-  if (state.mode === "browser") {
-    setConnectionStatus("On-device", false);
-  } else {
-    setConnectionStatus("Ready", false);
-  }
-  elements.lastUpdated.textContent = `v${APP_VERSION} ready`;
-}
+// ------------------------------------------------------------ scene diary ---
 
 function noteSceneDiary(detections) {
   const next = countLabels(detections);
@@ -2238,260 +1042,1253 @@ function noteSceneDiary(detections) {
   }
   const line = diaryLine(diffCounts(state.diaryCounts, next));
   state.diaryCounts = next;
-  if (!line || line === state.diaryLastLine) {
+  if (!line || line === state.diaryLast) {
     return;
   }
-  state.diaryLastLine = line;
-  const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  state.diary.unshift({ at: stamp, line });
-  state.diary = state.diary.slice(0, 40);
+  state.diaryLast = line;
+  state.diary = [{ at: clockTime(), line }, ...state.diary].slice(0, 60);
   renderDiary();
 }
 
 function renderDiary() {
-  const list = document.querySelector("#diaryList");
-  const empty = document.querySelector("#diaryEmpty");
-  if (!list) {
+  els.diaryEmpty.hidden = state.diary.length > 0;
+  els.diaryCount.textContent = String(state.diary.length);
+  els.diaryList.replaceChildren(...state.diary.map((entry) => h("li", {}, h("time", {}, entry.at), h("span", {}, entry.line))));
+  const latest = state.diary[0];
+  els.diaryLatest.hidden = !latest;
+  if (latest) {
+    els.diaryLatest.textContent = `${latest.at}  ${latest.line}`;
+  }
+}
+
+// ------------------------------------------------------------------ zones ---
+
+function setRoiDrawing(active) {
+  state.roiDrawing = active;
+  els.stage.classList.toggle("is-drawing", active);
+  els.zoneButton.setAttribute("aria-pressed", active ? "true" : "false");
+  if (!active) {
+    state.roiStart = null;
+    state.roiPreview = null;
+  }
+}
+
+function startZoneDraw() {
+  if (!state.source) {
+    toast.show("Start a source first, then draw on the monitor.");
     return;
   }
-  list.replaceChildren();
-  if (empty) {
-    empty.classList.toggle("hidden", state.diary.length > 0);
-  }
-  for (const entry of state.diary) {
-    const item = document.createElement("li");
-    item.textContent = `${entry.at}  ${entry.line}`;
-    list.append(item);
-  }
-}
-
-function readCopilotStore() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(COPILOT_KEY) || "{}");
-    return saved && typeof saved === "object" ? saved : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeCopilotStore(patch) {
-  const current = readCopilotStore();
-  localStorage.setItem(COPILOT_KEY, JSON.stringify({ ...current, ...patch }));
-}
-
-function persistCopilotThread() {
-  const thread = state.copilotMessages.slice(-30).map((message) => ({
-    role: message.role === "assistant" ? "assistant" : "user",
-    content: String(message.content || "").slice(0, 4000),
-  }));
-  writeCopilotStore({ thread });
-}
-
-function sceneLabelSummary() {
-  const counts = {};
-  for (const detection of state.detections) {
-    const label = detection.label || detection.class || "object";
-    counts[label] = (counts[label] || 0) + 1;
-  }
-  const parts = Object.entries(counts).map(([label, count]) => `${count} ${label}`);
-  return parts.length ? parts.join(", ") : "nothing detected";
-}
-
-function renderCopilotThread() {
-  if (!elements.copilotThread) {
+  if (state.rois.length >= MAX_ROIS) {
+    toast.show(`Three zones is the limit. Clear one to draw another.`);
     return;
   }
-  elements.copilotThread.replaceChildren();
-  for (const message of state.copilotMessages) {
-    const bubble = document.createElement("div");
-    bubble.className = `copilot-bubble ${message.role === "assistant" ? "assistant" : "user"}`;
-    bubble.textContent = message.content;
-    elements.copilotThread.append(bubble);
-  }
-  elements.copilotThread.scrollTop = elements.copilotThread.scrollHeight;
+  setRoiDrawing(true);
+  els.roiStatus.textContent = "Drag on the monitor to draw the zone. Esc cancels.";
+  toast.show("Drag on the monitor to draw a zone.");
 }
 
-function selectCopilotProvider(provider, keepTyped = true) {
-  const spec = COPILOT_PROVIDERS[provider];
-  if (!spec) {
-    return;
-  }
-  const store = readCopilotStore();
-  const keys = store.keys && typeof store.keys === "object" ? { ...store.keys } : {};
-  if (keepTyped && elements.copilotKey && state.copilotProvider !== provider) {
-    keys[state.copilotProvider] = elements.copilotKey.value;
-  }
-  state.copilotProvider = provider;
-  writeCopilotStore({ provider, keys });
-  document.querySelectorAll("[data-provider]").forEach((button) => {
-    button.setAttribute("aria-pressed", button.dataset.provider === provider ? "true" : "false");
-  });
-  if (elements.copilotModel) {
-    elements.copilotModel.textContent = `${spec.model} · ${spec.vendor}`;
-  }
-  if (elements.copilotKey) {
-    elements.copilotKey.value = keys[provider] || "";
-    elements.copilotKey.placeholder = `${spec.label} key, stored only in this browser`;
+function renderZones() {
+  els.roiClearButton.disabled = state.rois.length === 0;
+  els.zoneList.replaceChildren(
+    ...state.rois.map((roi, index) =>
+      h(
+        "li",
+        { style: { "--swatch": ROI_COLORS[index % ROI_COLORS.length] } },
+        h("i"),
+        h("span", {}, `Zone ${index + 1}`),
+        h("span", { class: "zone-count num" }, `${state.zoneCounts[index] || 0} inside · ${state.zoneAlerts[index] || 0} alerts`),
+        h("button", { type: "button", onClick: () => removeZone(index), "aria-label": `Remove zone ${index + 1}` }, "Remove"),
+      ),
+    ),
+  );
+  if (!state.rois.length && !state.roiDrawing) {
+    els.roiStatus.textContent = state.source ? "No zones yet. Press Draw zone, then drag on the monitor." : "No zones yet. Start a source, then draw on the monitor.";
+  } else if (state.rois.length) {
+    els.roiStatus.textContent = `${plural(state.rois.length, "zone")} armed. A zone alerts when something new enters it.`;
   }
 }
 
-function toggleCopilotListen() {
-  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!Recognition) {
-    elements.copilotStatus.textContent = "This browser has no speech recognition. Type the question instead.";
-    return;
-  }
-  if (state.copilotListener) {
-    state.copilotListener.stop();
-    state.copilotListener = null;
-    elements.copilotListen.textContent = "Listen";
-    return;
-  }
-  const listener = new Recognition();
-  listener.continuous = true;
-  listener.interimResults = true;
-  listener.onresult = (event) => {
-    let text = "";
-    for (let index = 0; index < event.results.length; index += 1) {
-      text += event.results[index][0].transcript;
-    }
-    elements.copilotInput.value = text.trim().slice(0, 4000);
-  };
-  listener.onerror = () => {
-    elements.copilotStatus.textContent = "Listening stopped.";
-    elements.copilotListen.textContent = "Listen";
-    state.copilotListener = null;
-  };
-  listener.onend = () => {
-    if (state.copilotListener === listener) {
-      elements.copilotListen.textContent = "Listen";
-      state.copilotListener = null;
-    }
-  };
-  state.copilotListener = listener;
-  elements.copilotListen.textContent = "Stop";
-  elements.copilotStatus.textContent = "Listening. Ask when the line sounds right.";
-  listener.start();
+function removeZone(index) {
+  state.rois.splice(index, 1);
+  state.roiOccupied.splice(index, 1);
+  state.roiCooldown.splice(index, 1);
+  state.zoneCounts.splice(index, 1);
+  state.zoneAlerts.splice(index, 1);
+  renderZones();
 }
 
-async function askCopilot() {
-  const typed = elements.copilotInput.value.trim();
-  const apiKey = elements.copilotKey.value.trim();
-  if (!apiKey) {
-    elements.copilotStatus.textContent =
-      "Add an API key for this model. It stays in this browser and is sent only to the local server with your question.";
+function clearZones() {
+  state.rois = [];
+  state.roiOccupied = [];
+  state.roiCooldown = [];
+  state.zoneCounts = [];
+  state.zoneAlerts = [];
+  setRoiDrawing(false);
+  renderZones();
+}
+
+function checkZones(detections) {
+  if (!state.rois.length) {
     return;
   }
-  if (!typed) {
-    elements.copilotStatus.textContent = "Write a question, or use Listen.";
-    return;
-  }
-  let content = typed;
-  if (elements.copilotUseScene?.checked) {
-    content = `${typed}\n\nScene labels: ${sceneLabelSummary()}.`;
-  }
-  state.copilotMessages.push({ role: "user", content });
-  renderCopilotThread();
-  elements.copilotInput.value = "";
-  elements.copilotAsk.disabled = true;
-  elements.copilotStatus.textContent = "Asking…";
-  try {
-    const response = await fetch("/api/copilot", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        provider: state.copilotProvider,
-        apiKey,
-        messages: state.copilotMessages.slice(-12),
-      }),
+  const now = performance.now();
+  const inside = state.rois.map(() => []);
+  for (const detection of detections) {
+    const box = detection.box;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    state.rois.forEach((roi, index) => {
+      if (pointInRoi(cx, cy, roi, state.frameSize.width, state.frameSize.height)) {
+        inside[index].push(detection);
+      }
     });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      state.copilotMessages.pop();
-      renderCopilotThread();
-      elements.copilotStatus.textContent = payload.detail || "Copilot could not answer.";
+  }
+  let changed = false;
+  inside.forEach((items, index) => {
+    const was = Boolean(state.roiOccupied[index]);
+    const is = items.length > 0;
+    if ((state.zoneCounts[index] || 0) !== items.length) {
+      changed = true;
+    }
+    state.zoneCounts[index] = items.length;
+    if (is && !was && now - (state.roiCooldown[index] || 0) >= ROI_COOLDOWN_MS) {
+      state.roiCooldown[index] = now;
+      zoneAlert(items[0], index);
+      changed = true;
+    }
+    state.roiOccupied[index] = is;
+  });
+  if (changed) {
+    renderZones();
+  }
+}
+
+function zoneAlert(detection, index) {
+  state.zoneAlerts[index] = (state.zoneAlerts[index] || 0) + 1;
+  state.session.roi_alerts = (state.session.roi_alerts || 0) + 1;
+  els.roiAlerts.textContent = String(state.session.roi_alerts);
+  toast.show(`${detection.label} entered zone ${index + 1}`);
+  if (settings.alertSound) {
+    playAlertTone();
+  }
+  if (settings.spatialAudio) {
+    playSpatialPing(detection, state.frameSize.width, { enabled: true });
+  }
+  captureFilmstrip(`${detection.label} · zone ${index + 1}`);
+  if (state.engineId === "server") {
+    ensureServerRuntime().sendRoiAlert();
+  } else {
+    state.session.roi_alerts = browserSession.recordRoiAlert();
+    els.roiAlerts.textContent = String(state.session.roi_alerts);
+  }
+}
+
+function captureFilmstrip(label) {
+  const source = currentSource();
+  if (!source || !state.lastFitted) {
+    return;
+  }
+  const rect = els.stage.getBoundingClientRect();
+  const canvas = snapshotComposite(source, els.overlay, rect.width, rect.height, state.lastFitted);
+  state.filmstrip = [{ label, at: clockTime(), url: canvas.toDataURL("image/jpeg", 0.7) }, ...state.filmstrip].slice(0, 8);
+  els.filmstripCount.textContent = String(state.filmstrip.length);
+  els.exportFilmstrip.disabled = false;
+  els.alertFilmstrip.replaceChildren(
+    ...state.filmstrip.map((clip) => h("figure", {}, h("img", { src: clip.url, alt: clip.label }), h("figcaption", {}, `${clip.at}  ${clip.label}`))),
+  );
+}
+
+function exportGallery() {
+  if (!state.filmstrip.length) {
+    return;
+  }
+  const escape = (value) => String(value).replace(/[&<>"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[char]);
+  const cards = state.filmstrip
+    .map((clip) => `<figure><img src="${clip.url}" alt="${escape(clip.label)}"><figcaption>${escape(clip.at)}  ${escape(clip.label)}</figcaption></figure>`)
+    .join("");
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Zone alerts</title><style>body{margin:0;padding:24px;background:#1c1f24;color:#e8eaed;font-family:system-ui,sans-serif}h1{font-size:20px}div{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}figure{margin:0;border:1px solid #373c45;border-radius:8px;overflow:hidden}img{width:100%;display:block}figcaption{padding:8px;font-size:13px;color:#a9b0b9}</style></head><body><h1>Zone alerts</h1><div>${cards}</div></body></html>`;
+  downloadBlob(new Blob([html], { type: "text/html" }), `zone-alerts-${fileStamp()}.html`);
+  toast.ok("Gallery saved");
+}
+
+// ------------------------------------------------------------------ studio ---
+
+function studioOutputWanted() {
+  return (
+    settings.studioEffect !== "none" ||
+    settings.grade !== "none" ||
+    settings.mirror ||
+    settings.autoFrame ||
+    cleanNameplate(settings.nameplate) !== "" ||
+    settings.burnHud ||
+    state.virtualCamOn ||
+    Boolean(state.cleanFeedWindow) ||
+    Boolean(state.recorder) ||
+    state.boothRunning
+  );
+}
+
+function maskWanted() {
+  return settings.useMask && MASK_EFFECTS.has(settings.studioEffect) && settings.vanishMode === "people" && Boolean(state.source);
+}
+
+function ensureMask() {
+  if (!maskWanted() || segmenter.ready || state.maskStatus === "loading") {
+    return;
+  }
+  if (state.maskStatus === "failed") {
+    return;
+  }
+  state.maskStatus = "loading";
+  updateStudioChips();
+  segmenter
+    .load()
+    .then(() => {
+      state.maskStatus = "ready";
+      els.maskNote.textContent = `Person mask ready (${segmenter.delegate === "GPU" ? "GPU" : "CPU"}). Effects follow the body outline.`;
+      updateStudioChips();
+    })
+    .catch(() => {
+      state.maskStatus = "failed";
+      els.maskNote.textContent = "The person mask could not load here, so effects use detection boxes.";
+      els.maskNote.dataset.tone = "warn";
+      toast.error("The person mask could not load, so the studio is using boxes.");
+      updateStudioChips();
+    });
+}
+
+function updateStudioChips() {
+  const effect = settings.studioEffect;
+  els.invisibleChip.hidden = effect !== "disappear" || !state.source;
+  els.maskChip.hidden = !(maskWanted() && state.maskStatus === "ready" && studioOutputWanted());
+  if (maskWanted() && state.maskStatus === "loading") {
+    els.maskChip.hidden = false;
+    els.maskChip.textContent = "Loading person mask";
+  } else {
+    els.maskChip.textContent = state.maskMissed ? "Boxes for far people" : "Person mask";
+  }
+}
+
+function ensurePlate() {
+  if (!state.plate) {
+    state.plate = { canvas: document.createElement("canvas"), seeded: false, learned: 0, captured: false, known: null };
+  }
+  return state.plate;
+}
+
+function renderStudio(now) {
+  const canvas = els.studioCanvas;
+  const source = currentSource();
+  const show = Boolean(source) && studioOutputWanted();
+  canvas.hidden = !show;
+  els.stage.classList.toggle("studio-live", show);
+  if (!show) {
+    return null;
+  }
+  const size = sourceSize(source);
+  const width = Math.min(STUDIO_MAX_WIDTH, size.width || 640);
+  const height = Math.max(1, Math.round(width * ((size.height || 360) / (size.width || 640))));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  const frameSize = state.frameSize.width ? state.frameSize : { width, height };
+  const plate = ensurePlate();
+  const boxes = effectTargets(state.detections, frameSize, { width, height }, {
+    pad: settings.studioPad,
+    vanishMode: settings.vanishMode,
+    selectedClasses: settings.selectedClasses,
+  });
+  let mask = null;
+  let maskKind = "none";
+  if (maskWanted()) {
+    ensureMask();
+    if (segmenter.ready) {
+      const interval = state.source.kind === "still" ? 400 : 33;
+      if (!state.mask || now - state.maskAt > interval) {
+        state.mask = segmenter.segment(source) || state.mask;
+        state.maskAt = now;
+      }
+      // A person the mask only half covers (far away, side-on) gets a box mask instead.
+      const bands = state.detections
+        .filter((item) => item.label === "person")
+        .map((item) => segmenter.coverageBands(item.box, state.frameSize));
+      const missed = !maskTrusted(bands);
+      if (missed !== state.maskMissed) {
+        state.maskMissed = missed;
+        updateStudioChips();
+      }
+      if (state.mask && !missed) {
+        mask = state.mask;
+        maskKind = "person";
+      }
+    }
+  }
+  if (!mask && settings.studioEffect !== "none") {
+    mask = boxMask(boxes, width, height);
+    maskKind = "box";
+  }
+  if (state.capturePlate || (settings.studioEffect === "disappear" && state.detectionsReady)) {
+    learnPlate(plate, source, width, height, boxes, state.capturePlate, state.capturePlate ? null : mask);
+    if (state.capturePlate) {
+      toast.ok("Background captured");
+    }
+    state.capturePlate = false;
+  }
+  const rendered = compositeFrame(canvas.getContext("2d"), source, width, height, {
+    effect: settings.studioEffect,
+    detections: state.detections,
+    frameSize,
+    plate,
+    mask,
+    maskKind,
+    pad: settings.studioPad,
+    vanishMode: settings.vanishMode,
+    selectedClasses: settings.selectedClasses,
+    backgroundColor: settings.backgroundColor,
+    grade: settings.grade,
+    mirror: settings.mirror,
+    autoFrame: settings.autoFrame,
+    previousCrop: state.crop,
+    nameplate: settings.nameplate,
+    burnHud: settings.burnHud,
+    hudText: settings.burnHud ? plural(state.detections.length, "object") : "",
+  });
+  state.crop = rendered.crop;
+  if (settings.studioEffect === "disappear") {
+    els.invisibleChip.textContent = rendered.plateReady ? "Invisible" : "Learning the room";
+    els.plateNote.textContent = rendered.plateReady
+      ? "The room behind you is learned. Move around and it stays filled in."
+      : "Learning the room as you move. Step aside for a moment, or capture the background, for a clean result.";
+  }
+  publishStudio(canvas, now);
+  return canvas;
+}
+
+function publishStudio(canvas, now) {
+  if (state.cleanFeedWindow && state.studioChannel && now - state.cleanFeedSentAt > 66) {
+    state.cleanFeedSentAt = now;
+    canvas.toBlob((blob) => {
+      if (blob && state.studioChannel) {
+        state.studioChannel.postMessage(blob);
+      }
+    }, "image/jpeg", 0.8);
+  }
+  if (!state.virtualCamOn || !state.serverAvailable || state.virtualCamBusy || now - state.virtualCamSentAt < 90) {
+    return;
+  }
+  state.virtualCamSentAt = now;
+  state.virtualCamBusy = true;
+  canvas.toBlob(async (blob) => {
+    try {
+      if (!blob) {
+        return;
+      }
+      const response = await fetch(apiUrl("api/virtualcam/frame"), { method: "POST", headers: { "content-type": "image/jpeg" }, body: blob });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.detail || "The bridge rejected the frame.");
+      }
+      els.virtualCamStatus.textContent = payload.available
+        ? `OBS Virtual Camera is live (${payload.frames} frames). Pick it in the other app.`
+        : `The bridge has ${payload.frames} frames but no camera device. Install OBS and pyvirtualcam. OBS can also read ${payload.mjpeg_path}.`;
+    } catch (error) {
+      els.virtualCamStatus.textContent = error.message || "The virtual camera bridge did not answer.";
+    } finally {
+      state.virtualCamBusy = false;
+    }
+  }, "image/jpeg", 0.82);
+}
+
+function markEffect(effect) {
+  for (const button of $$("[data-effect]")) {
+    button.setAttribute("aria-pressed", button.dataset.effect === effect ? "true" : "false");
+  }
+  updateStudioChips();
+}
+
+function markLook(name) {
+  for (const button of $$("[data-look]")) {
+    button.setAttribute("aria-pressed", button.dataset.look === name ? "true" : "false");
+  }
+}
+
+function setEffect(effect, { quiet = false } = {}) {
+  update({ studioEffect: effect });
+  markEffect(effect);
+  markLook("");
+  if (effect === "disappear") {
+    els.studioNote.textContent = "Invisible: people leave the outgoing picture. Capture the empty room once for the cleanest result.";
+  } else if (effect === "none") {
+    els.studioNote.textContent = "The studio changes the outgoing picture: the clean feed, recordings, and the virtual camera.";
+  } else {
+    els.studioNote.textContent = "The effect is in the clean feed, recordings, and the virtual camera. The monitor shows it too.";
+  }
+  ensureMask();
+  if (!quiet) {
+    const label = $(`[data-effect="${effect}"]`)?.textContent || effect;
+    toast.show(effect === "none" ? "Effect off" : `Effect: ${label}`);
+  }
+}
+
+function applyLook(name) {
+  const look = LOOKS[name];
+  if (!look) {
+    return;
+  }
+  const patch = { grade: look.grade };
+  if ("mirror" in look) {
+    patch.mirror = look.mirror;
+  }
+  if (look.vanishMode) {
+    patch.vanishMode = look.vanishMode;
+  }
+  update(patch);
+  syncControls();
+  setEffect(look.effect, { quiet: true });
+  els.studioNote.textContent = look.note;
+  markLook(name);
+  toast.show(look.note);
+}
+
+function goInvisible() {
+  update({ vanishMode: "people" });
+  els.vanishMode.value = "people";
+  setEffect("disappear", { quiet: true });
+  tabs.select("studio");
+  if (!state.source) {
+    startCamera();
+  }
+  toast.show("Invisible is on. Step out of frame once so it can learn the room.");
+}
+
+function cloneFrame(source) {
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width || source.videoWidth || 640;
+  canvas.height = source.height || source.videoHeight || 360;
+  canvas.getContext("2d").drawImage(source, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+async function photoBooth() {
+  if (state.boothRunning) {
+    return;
+  }
+  const source = currentSource();
+  if (!source) {
+    toast.show("Start the camera or open a sample before the photo booth.");
+    return;
+  }
+  state.boothRunning = true;
+  els.photoBoothButton.disabled = true;
+  const fast = reducedMotion();
+  for (const tick of fast ? ["1"] : ["3", "2", "1"]) {
+    els.boothCountdown.textContent = tick;
+    els.boothCountdown.hidden = false;
+    await wait(fast ? 200 : 700);
+  }
+  const shots = [];
+  for (let index = 0; index < 4; index += 1) {
+    const live = els.studioCanvas.hidden ? currentSource() || source : els.studioCanvas;
+    shots.push(cloneFrame(live));
+    els.boothCountdown.textContent = `${index + 1}/4`;
+    await wait(fast ? 120 : 520);
+  }
+  els.boothCountdown.hidden = true;
+  state.boothStrip = buildPhotoStrip(shots, { caption: `Photo booth  ${new Date().toLocaleString()}` });
+  els.boothPreview.src = state.boothStrip.toDataURL("image/png");
+  els.boothPreview.hidden = false;
+  els.downloadBooth.disabled = false;
+  state.boothRunning = false;
+  els.photoBoothButton.disabled = false;
+  tabs.select("studio");
+  toast.ok("Strip ready. Save it from the Studio panel.");
+}
+
+function downloadBooth() {
+  if (state.boothStrip) {
+    downloadUrl(state.boothStrip.toDataURL("image/png"), `photo-booth-${fileStamp()}.png`);
+    toast.ok("Strip saved");
+  }
+}
+
+function openCleanFeed() {
+  if (state.cleanFeedWindow && !state.cleanFeedWindow.closed) {
+    state.cleanFeedWindow.focus();
+    return;
+  }
+  if (!state.studioChannel && "BroadcastChannel" in window) {
+    state.studioChannel = new BroadcastChannel("detection-studio");
+  }
+  const popup = window.open("static/studio.html", "detection-clean-feed", "width=960,height=560");
+  if (!popup) {
+    toast.error("The browser blocked the window. Allow pop-ups for this page and try again.");
+    return;
+  }
+  state.cleanFeedWindow = popup;
+  els.cleanFeedButton.textContent = "Show clean feed";
+  toast.ok("Clean feed open. Share that window in your call.");
+  updateTally();
+}
+
+function toggleRecording() {
+  if (state.recorder) {
+    state.recorder.stop();
+    return;
+  }
+  if (!state.source) {
+    toast.show("Start a source before recording.");
+    return;
+  }
+  const canvas = els.studioCanvas;
+  if (!canvas.captureStream || typeof MediaRecorder === "undefined") {
+    toast.error("This browser cannot record the studio picture.");
+    return;
+  }
+  const types = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm", "video/mp4"];
+  const mimeType = types.find((type) => MediaRecorder.isTypeSupported?.(type)) || "";
+  const recorder = new MediaRecorder(canvas.captureStream(30), mimeType ? { mimeType } : undefined);
+  state.recordChunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data?.size) {
+      state.recordChunks.push(event.data);
+    }
+  };
+  recorder.onstop = () => {
+    const type = recorder.mimeType || "video/webm";
+    const extension = type.includes("mp4") ? "mp4" : "webm";
+    downloadBlob(new Blob(state.recordChunks, { type }), `studio-clip-${fileStamp()}.${extension}`);
+    state.recorder = null;
+    els.recordButton.textContent = "Record clip";
+    els.recordButton.dataset.state = "";
+    toast.ok("Clip saved");
+    updateTally();
+  };
+  // The studio canvas must be drawing before the recorder starts.
+  state.recorder = recorder;
+  renderStudio(performance.now());
+  recorder.start(1000);
+  els.recordButton.textContent = "Stop recording";
+  els.recordButton.dataset.state = "live";
+  updateTally();
+}
+
+function setVirtualCam(on) {
+  if (on && !state.serverAvailable) {
+    els.virtualCamToggle.checked = false;
+    toast.error("The virtual camera needs the local server. Run python -m app.");
+    return;
+  }
+  state.virtualCamOn = on;
+  els.virtualCamToggle.checked = on;
+  els.virtualCamStatus.textContent = on ? "Sending the studio picture to the local bridge…" : "Virtual camera off.";
+  updateTally();
+}
+
+function renderVideoAppGuide() {
+  const guide = videoAppGuide(settings.videoApp);
+  els.videoAppGuide.replaceChildren(
+    h("strong", {}, guide.name),
+    h("dl", {}, h("dt", {}, "As a camera"), h("dd", {}, guide.camera), h("dt", {}, "As a shared window"), h("dd", {}, guide.window)),
+    h("ol", {}, ...guide.setup.map((step) => h("li", {}, step))),
+  );
+}
+
+// ----------------------------------------------------------------- tally ---
+
+function updateTally() {
+  if (state.cleanFeedWindow?.closed) {
+    state.cleanFeedWindow = null;
+    els.cleanFeedButton.textContent = "Open clean feed";
+  }
+  const live = Boolean(state.source) && (Boolean(state.recorder) || Boolean(state.cleanFeedWindow) || (state.virtualCamOn && state.serverAvailable));
+  const tally = live ? "live" : state.source ? "preview" : "off";
+  if (tally === state.tally) {
+    return;
+  }
+  state.tally = tally;
+  els.tallyLamp.dataset.state = tally;
+  els.monitor.dataset.tally = tally;
+  els.tallyTag.textContent = tally === "live" ? "On air" : tally === "preview" ? "Preview" : "Idle";
+}
+
+// ------------------------------------------------------------- transport ---
+
+function syncTransport() {
+  const hasSource = Boolean(state.source);
+  const camera = state.source?.kind === "camera";
+  els.cameraToggleLabel.textContent = camera ? "Stop camera" : hasSource ? "Close source" : "Start camera";
+  els.cameraToggle.dataset.state = camera ? "live" : "";
+  els.pauseButton.disabled = !isLive();
+  els.pauseLabel.textContent = state.paused ? "Resume" : "Pause";
+  els.snapshotButton.disabled = !hasSource;
+  els.zoneButton.disabled = !hasSource;
+  els.roiDrawButton.disabled = !hasSource;
+  renderZones();
+}
+
+function toggleCamera() {
+  if (state.source) {
+    const wasCamera = state.source.kind === "camera";
+    detachSource();
+    toast.show(wasCamera ? "Camera stopped" : "Source closed");
+    return;
+  }
+  startCamera();
+}
+
+function togglePause() {
+  if (!isLive()) {
+    return;
+  }
+  state.paused = !state.paused;
+  syncTransport();
+  els.hudState.textContent = state.paused ? "Paused" : state.source.kind === "camera" ? "Live" : "Synthetic";
+  toast.show(state.paused ? "Detection paused" : "Detection running");
+}
+
+function snapshot() {
+  const source = currentSource();
+  if (!source) {
+    return;
+  }
+  const rect = els.stage.getBoundingClientRect();
+  const fitted = state.lastFitted || letterbox(rect.width, rect.height, state.frameSize.width, state.frameSize.height);
+  const picture = els.studioCanvas.hidden ? source : els.studioCanvas;
+  const canvas = snapshotComposite(picture, els.overlay, rect.width, rect.height, fitted);
+  downloadUrl(canvas.toDataURL("image/png"), `detection-snapshot-${fileStamp()}.png`);
+  toast.ok("Snapshot saved");
+}
+
+async function toggleFullscreen() {
+  try {
+    if (!document.fullscreenElement) {
+      await els.stage.requestFullscreen?.();
+    } else {
+      await document.exitFullscreen?.();
+    }
+  } catch {
+    toast.error("Fullscreen is not available here.");
+  }
+}
+
+function exportHistory() {
+  const body = {
+    exported_at: new Date().toISOString(),
+    version: VERSION,
+    engine: state.engineId,
+    session: state.session,
+    history: state.history,
+    diary: state.diary,
+  };
+  downloadBlob(new Blob([JSON.stringify(body, null, 2)], { type: "application/json" }), `detection-history-${fileStamp()}.json`);
+  toast.ok("History saved");
+}
+
+function clearHistory() {
+  state.history = [];
+  els.historyList.replaceChildren();
+  els.historyCount.textContent = "0";
+  els.exportHistoryButton.disabled = true;
+  els.clearHistoryButton.disabled = true;
+}
+
+// ---------------------------------------------------------------- render ---
+
+let lastFrameAt = 0;
+
+function outputsActive() {
+  return Boolean(state.source) && (Boolean(state.recorder) || Boolean(state.cleanFeedWindow) || state.virtualCamOn);
+}
+
+/**
+ * Browsers stop animation frames for covered or hidden windows, which would
+ * freeze the clean feed the moment you switch to the call. While an output
+ * is running, a timer keeps the studio drawing (hidden tabs still throttle
+ * timers, so keep the window visible).
+ */
+window.setInterval(() => {
+  if (outputsActive() && performance.now() - lastFrameAt > 120) {
+    renderFrame(performance.now());
+  }
+}, 40);
+
+function renderLoop(now) {
+  renderFrame(now);
+  requestAnimationFrame(renderLoop);
+}
+
+function renderFrame(now) {
+  lastFrameAt = performance.now();
+  const source = currentSource();
+  renderStudio(now);
+  const snap = !settings.glide || reducedMotion() || state.source?.kind === "still";
+  const items = glide.step(now, { snap });
+  const drawn = drawOverlay({
+    overlay: els.overlay,
+    stage: els.stage,
+    items,
+    ghosts: state.ghosts,
+    rois: state.rois,
+    roiPreview: state.roiPreview,
+    frameSize: state.frameSize,
+    source: els.studioCanvas.hidden ? source : els.studioCanvas,
+    live: Boolean(state.source),
+    zoneCounts: state.zoneCounts,
+    options: {
+      showLabels: settings.showLabels,
+      showTrails: settings.showTrails && !reducedMotion(),
+      cornerBoxes: settings.cornerBoxes,
+      privacyMode: settings.privacyMode,
+      privacyBlur: settings.privacyBlur,
+      ghostMode: settings.ghostMode,
+      ghostOpacity: settings.ghostOpacity,
+    },
+  });
+  state.lastFitted = drawn.fitted;
+  drawHeatmap(els.heatmap, els.stage, state.heat, state.frameSize, settings.showHeatmap && Boolean(state.source));
+  updateTally();
+}
+
+// --------------------------------------------------------------- controls ---
+
+function renderClassPicker() {
+  const query = els.classSearch.value.trim().toLowerCase();
+  const selected = new Set(settings.selectedClasses);
+  const classes = COCO_CLASSES.filter((label) => !query || label.includes(query));
+  els.classChipList.replaceChildren(
+    ...classes.map((label) =>
+      h(
+        "button",
+        {
+          type: "button",
+          class: "class-toggle",
+          "aria-pressed": selected.has(label) ? "true" : "false",
+          style: { "--swatch": colorForLabel(label) },
+          onClick: () => toggleClass(label),
+        },
+        h("i"),
+        label,
+      ),
+    ),
+  );
+  els.classNote.textContent = settings.selectedClasses.length
+    ? `Only ${settings.selectedClasses.length === 1 ? settings.selectedClasses[0] : `${settings.selectedClasses.length} classes`} will be detected.`
+    : "No filter: every class is detected.";
+  for (const button of $$("[data-preset]")) {
+    const preset = CLASS_PRESETS[button.dataset.preset];
+    const same = preset.length === settings.selectedClasses.length && preset.every((label) => selected.has(label));
+    button.setAttribute("aria-pressed", same ? "true" : "false");
+  }
+}
+
+function toggleClass(label) {
+  const selected = new Set(settings.selectedClasses);
+  if (selected.has(label)) {
+    selected.delete(label);
+  } else {
+    selected.add(label);
+  }
+  update({ selectedClasses: [...selected] });
+  renderClassPicker();
+  sendDetectionConfig();
+  rerunIfStill();
+}
+
+function applyPreset(name) {
+  update({ selectedClasses: [...(CLASS_PRESETS[name] || [])] });
+  renderClassPicker();
+  sendDetectionConfig();
+  rerunIfStill();
+}
+
+function syncControls() {
+  els.confidenceRange.value = String(settings.confidence);
+  els.confidenceValue.textContent = `${Math.round(settings.confidence * 100)}%`;
+  els.fpsRange.value = String(settings.targetFps);
+  els.fpsValue.textContent = String(settings.targetFps);
+  els.widthRange.value = String(settings.processingWidth);
+  els.widthValue.textContent = `${settings.processingWidth} px`;
+  els.labelToggle.checked = settings.showLabels;
+  els.cornerBoxToggle.checked = settings.cornerBoxes;
+  els.trailToggle.checked = settings.showTrails;
+  els.glideToggle.checked = settings.glide;
+  els.ghostToggle.checked = settings.ghostMode;
+  els.ghostOpacityRange.value = String(settings.ghostOpacity);
+  els.ghostOpacityValue.textContent = `${Math.round(settings.ghostOpacity * 100)}%`;
+  els.heatmapToggle.checked = settings.showHeatmap;
+  els.privacyToggle.checked = settings.privacyMode;
+  els.privacyBlurRange.value = String(settings.privacyBlur);
+  els.privacyBlurValue.textContent = `${settings.privacyBlur} px`;
+  els.alertSoundToggle.checked = settings.alertSound;
+  els.spatialAudioToggle.checked = settings.spatialAudio;
+  els.sonifyToggle.checked = settings.sonify;
+  els.maskToggle.checked = settings.useMask;
+  els.vanishMode.value = settings.vanishMode;
+  els.padRange.value = String(settings.studioPad);
+  els.padValue.textContent = `${Math.round(settings.studioPad * 100)}%`;
+  els.backgroundColor.value = settings.backgroundColor;
+  els.gradeSelect.value = settings.grade;
+  els.mirrorToggle.checked = settings.mirror;
+  els.autoFrameToggle.checked = settings.autoFrame;
+  els.nameplateInput.value = settings.nameplate;
+  els.burnHudToggle.checked = settings.burnHud;
+  els.videoAppSelect.value = settings.videoApp;
+  markEffect(settings.studioEffect);
+}
+
+function bindRange(input, key, format, { after } = {}) {
+  input.addEventListener("input", () => {
+    const value = Number(input.value);
+    update({ [key]: value });
+    format(value);
+    after?.();
+  });
+}
+
+function bindToggle(input, key, after) {
+  input.addEventListener("change", () => {
+    update({ [key]: input.checked });
+    after?.(input.checked);
+  });
+}
+
+function wireControls() {
+  bindRange(els.confidenceRange, "confidence", (value) => {
+    els.confidenceValue.textContent = `${Math.round(value * 100)}%`;
+  }, { after: () => sendDetectionConfig() });
+  els.confidenceRange.addEventListener("change", rerunIfStill);
+  bindRange(els.fpsRange, "targetFps", (value) => {
+    els.fpsValue.textContent = String(value);
+  });
+  bindRange(els.widthRange, "processingWidth", (value) => {
+    els.widthValue.textContent = `${value} px`;
+  });
+  bindRange(els.ghostOpacityRange, "ghostOpacity", (value) => {
+    els.ghostOpacityValue.textContent = `${Math.round(value * 100)}%`;
+  });
+  bindRange(els.privacyBlurRange, "privacyBlur", (value) => {
+    els.privacyBlurValue.textContent = `${value} px`;
+  });
+  bindRange(els.padRange, "studioPad", (value) => {
+    els.padValue.textContent = `${Math.round(value * 100)}%`;
+  });
+  bindToggle(els.labelToggle, "showLabels");
+  bindToggle(els.cornerBoxToggle, "cornerBoxes");
+  bindToggle(els.trailToggle, "showTrails");
+  bindToggle(els.glideToggle, "glide");
+  bindToggle(els.ghostToggle, "ghostMode");
+  bindToggle(els.heatmapToggle, "showHeatmap");
+  bindToggle(els.privacyToggle, "privacyMode");
+  bindToggle(els.alertSoundToggle, "alertSound", (on) => on && resumeAudio());
+  bindToggle(els.spatialAudioToggle, "spatialAudio", (on) => on && resumeAudio());
+  bindToggle(els.sonifyToggle, "sonify", (on) => on && resumeAudio());
+  bindToggle(els.maskToggle, "useMask", (on) => {
+    if (on && state.maskStatus === "failed") {
+      state.maskStatus = "idle";
+      delete els.maskNote.dataset.tone;
+    }
+    state.mask = null;
+    ensureMask();
+    updateStudioChips();
+  });
+  bindToggle(els.mirrorToggle, "mirror", () => markLook(""));
+  bindToggle(els.autoFrameToggle, "autoFrame");
+  bindToggle(els.burnHudToggle, "burnHud");
+  els.vanishMode.addEventListener("change", () => {
+    update({ vanishMode: els.vanishMode.value });
+    markLook("");
+    updateStudioChips();
+  });
+  els.backgroundColor.addEventListener("input", () => update({ backgroundColor: els.backgroundColor.value }));
+  els.gradeSelect.addEventListener("change", () => {
+    update({ grade: els.gradeSelect.value });
+    markLook("");
+  });
+  els.nameplateInput.addEventListener("input", () => update({ nameplate: cleanNameplate(els.nameplateInput.value) }));
+  els.videoAppSelect.addEventListener("change", () => {
+    update({ videoApp: els.videoAppSelect.value });
+    renderVideoAppGuide();
+  });
+  els.virtualCamToggle.addEventListener("change", () => setVirtualCam(els.virtualCamToggle.checked));
+  els.classSearch.addEventListener("input", renderClassPicker);
+  els.uploadDetect.addEventListener("change", () => {
+    openImages(els.uploadDetect.files);
+    els.uploadDetect.value = "";
+  });
+
+  for (const button of $$("[data-sample]")) {
+    button.addEventListener("click", () => loadSample(button.dataset.sample));
+  }
+  for (const button of $$("[data-preset]")) {
+    button.addEventListener("click", () => applyPreset(button.dataset.preset));
+  }
+  for (const button of $$("[data-effect]")) {
+    button.addEventListener("click", () => setEffect(button.dataset.effect));
+  }
+  for (const button of $$("[data-look]")) {
+    button.addEventListener("click", () => applyLook(button.dataset.look));
+  }
+  document.addEventListener("click", (event) => {
+    const trigger = event.target.closest("[data-action]");
+    if (trigger && !trigger.disabled) {
+      runAction(trigger.dataset.action);
+    }
+  });
+
+  els.engineButton.addEventListener("click", () => {
+    tabs.select("detect");
+    els.engineList.querySelector("input:checked")?.focus();
+  });
+  els.paletteButton.addEventListener("click", () => palette.open());
+  els.themeButton.addEventListener("click", cycleTheme);
+  els.helpButton.addEventListener("click", openHelp);
+
+  // Zone drawing on the monitor.
+  els.stage.addEventListener("pointerdown", (event) => {
+    if (!state.roiDrawing || event.button !== 0) {
       return;
     }
-    state.copilotMessages.push({ role: "assistant", content: String(payload.reply || "") });
-    persistCopilotThread();
-    renderCopilotThread();
-    elements.copilotStatus.textContent = `${payload.model || state.copilotProvider} answered. This panel is not part of the outgoing picture.`;
-  } catch {
-    state.copilotMessages.pop();
-    renderCopilotThread();
-    elements.copilotStatus.textContent =
-      "Copilot needs the local server. On GitHub Pages the camera still runs in the browser, and this panel cannot call a model.";
-  } finally {
-    elements.copilotAsk.disabled = false;
+    event.preventDefault();
+    state.roiStart = pointerToNormalized(event, els.stage, state.frameSize);
+    state.roiPreview = { ...state.roiStart, width: 0, height: 0 };
+    els.stage.setPointerCapture(event.pointerId);
+  });
+  els.stage.addEventListener("pointermove", (event) => {
+    if (!state.roiDrawing || !state.roiStart) {
+      return;
+    }
+    const point = pointerToNormalized(event, els.stage, state.frameSize);
+    state.roiPreview = {
+      x: Math.min(state.roiStart.x, point.x),
+      y: Math.min(state.roiStart.y, point.y),
+      width: Math.abs(point.x - state.roiStart.x),
+      height: Math.abs(point.y - state.roiStart.y),
+    };
+  });
+  els.stage.addEventListener("pointerup", (event) => {
+    if (!state.roiDrawing || !state.roiStart) {
+      return;
+    }
+    const end = pointerToNormalized(event, els.stage, state.frameSize);
+    const roi = {
+      x: Math.min(state.roiStart.x, end.x),
+      y: Math.min(state.roiStart.y, end.y),
+      width: Math.abs(end.x - state.roiStart.x),
+      height: Math.abs(end.y - state.roiStart.y),
+    };
+    setRoiDrawing(false);
+    if (roi.width > 0.02 && roi.height > 0.02 && state.rois.length < MAX_ROIS) {
+      state.rois.push(roi);
+      state.roiOccupied.push(false);
+      state.roiCooldown.push(0);
+      state.zoneCounts.push(0);
+      state.zoneAlerts.push(0);
+      toast.ok(`Zone ${state.rois.length} armed`);
+      checkZones(state.detections);
+    } else {
+      toast.show("That zone was too small. Drag a larger area.");
+    }
+    renderZones();
+  });
+
+  window.addEventListener("pointerdown", () => resumeAudio(), { once: true });
+  window.addEventListener("pagehide", () => {
+    clearStageMedia();
+    serverRuntime?.disconnect();
+  });
+}
+
+// ------------------------------------------------------ commands + keys ---
+
+const ACTIONS = {
+  "camera.start": () => startCamera(),
+  "camera.toggle": () => toggleCamera(),
+  "detect.pause": () => togglePause(),
+  "capture.snapshot": () => snapshot(),
+  "view.fullscreen": () => toggleFullscreen(),
+  "zones.draw": () => startZoneDraw(),
+  "zones.clear": () => {
+    clearZones();
+    toast.show("Zones cleared");
+  },
+  "zones.exportGallery": () => exportGallery(),
+  "source.synthetic": () => startSynthetic(),
+  "studio.goInvisible": () => goInvisible(),
+  "studio.capturePlate": () => {
+    if (!state.source) {
+      toast.show("Start a source first.");
+      return;
+    }
+    if (!studioOutputWanted()) {
+      setEffect("disappear", { quiet: true });
+    }
+    state.capturePlate = true;
+  },
+  "studio.photoBooth": () => photoBooth(),
+  "studio.downloadBooth": () => downloadBooth(),
+  "studio.cleanFeed": () => openCleanFeed(),
+  "studio.record": () => toggleRecording(),
+  "history.export": () => exportHistory(),
+  "history.clear": () => clearHistory(),
+  "diary.save": () => {
+    downloadBlob(new Blob([diaryDocument(state.diary)], { type: "text/plain" }), `scene-diary-${fileStamp()}.txt`);
+    toast.ok("Diary saved");
+  },
+  "diary.clear": () => {
+    state.diary = [];
+    state.diaryLast = "";
+    renderDiary();
+  },
+  "diary.ask": () => {
+    const latest = state.diary[0]?.line;
+    if (!latest) {
+      toast.show("The diary is empty until something enters or leaves the frame.");
+      return;
+    }
+    tabs.select("copilot");
+    copilot.fillFrom(`The scene diary says: "${latest}". What changed, and should I do anything?`);
+  },
+  "copilot.ask": () => copilot.ask(),
+  "copilot.clear": () => copilot.clear(),
+  "copilot.forgetKey": () => copilot.forgetKey(),
+  "copilot.listen": () => copilot.listen(),
+};
+
+function runAction(id) {
+  const action = ACTIONS[id];
+  if (action) {
+    Promise.resolve(action()).catch((error) => toast.error(error?.message || "That did not work."));
   }
 }
 
-function bootCopilot() {
-  const store = readCopilotStore();
-  const provider = COPILOT_PROVIDERS[store.provider] ? store.provider : "grok";
-  if (Array.isArray(store.thread)) {
-    state.copilotMessages = store.thread
-      .filter((message) => message && (message.role === "user" || message.role === "assistant"))
-      .slice(-30)
-      .map((message) => ({
-        role: message.role,
-        content: String(message.content || "").slice(0, 4000),
-      }))
-      .filter((message) => message.content);
-    renderCopilotThread();
+function commandList() {
+  const hasSource = () => Boolean(state.source);
+  const commands = [
+    { id: "camera.start", group: "Source", title: "Start camera", keys: [], enabled: () => state.source?.kind !== "camera" },
+    { id: "camera.toggle", group: "Source", title: "Stop or close the source", enabled: hasSource },
+    ...Object.entries(SAMPLE_SCENES).map(([id, scene]) => ({ id: `sample.${id}`, group: "Source", title: `Open the ${scene.label.toLowerCase()}`, run: () => loadSample(id) })),
+    { id: "source.synthetic", group: "Source", title: "Synthetic test feed" },
+    { id: "source.open", group: "Source", title: "Open image files", run: () => els.uploadDetect.click() },
+    { id: "detect.pause", group: "Detect", title: "Pause or resume detection", keys: ["Space"], enabled: isLive },
+    { id: "capture.snapshot", group: "Detect", title: "Save a snapshot", keys: ["S"], enabled: hasSource },
+    ...ENGINES.map((engine) => ({
+      id: `engine.${engine.id}`,
+      group: "Engine",
+      title: `Use ${engine.label}`,
+      enabled: () => engine.id !== "server" || yoloAvailable(),
+      run: () => selectEngine(engine.id, { user: true }),
+    })),
+    ...Object.keys(CLASS_PRESETS).map((name) => ({ id: `preset.${name}`, group: "Classes", title: `Detect ${name === "all" ? "every class" : name}`, run: () => applyPreset(name) })),
+    { id: "studio.goInvisible", group: "Studio", title: "Go invisible", keys: ["D"] },
+    ...["none", "portrait", "replace", "pixelate", "spotlight", "outline"].map((effect) => ({
+      id: `effect.${effect}`,
+      group: "Studio",
+      title: effect === "none" ? "Turn the effect off" : `Effect: ${$(`[data-effect="${effect}"]`)?.textContent || effect}`,
+      run: () => setEffect(effect),
+    })),
+    ...Object.keys(LOOKS).map((name) => ({ id: `look.${name}`, group: "Studio", title: `Look: ${name[0].toUpperCase()}${name.slice(1)}`, run: () => applyLook(name) })),
+    { id: "studio.capturePlate", group: "Studio", title: "Capture the background", keys: ["B"], enabled: hasSource },
+    { id: "studio.mirror", group: "Studio", title: "Mirror the picture", keys: ["M"], run: toggleMirror },
+    { id: "studio.photoBooth", group: "Studio", title: "Take four photos", keys: ["P"], enabled: hasSource },
+    { id: "studio.cleanFeed", group: "Studio", title: "Open the clean feed window" },
+    { id: "studio.record", group: "Studio", title: "Start or stop recording", enabled: hasSource },
+    { id: "studio.virtualcam", group: "Studio", title: "Send to the virtual camera", enabled: () => state.serverAvailable, run: () => setVirtualCam(!state.virtualCamOn) },
+    { id: "zones.draw", group: "Zones", title: "Draw a zone", keys: ["Z"], enabled: hasSource },
+    { id: "zones.clear", group: "Zones", title: "Clear all zones", enabled: () => state.rois.length > 0 },
+    { id: "history.export", group: "Session", title: "Save history as JSON", enabled: () => state.history.length > 0 },
+    { id: "diary.save", group: "Session", title: "Save the scene diary" },
+    { id: "view.fullscreen", group: "View", title: "Fullscreen monitor", keys: ["F"] },
+    { id: "view.theme", group: "View", title: "Change the theme", run: cycleTheme },
+    { id: "view.help", group: "View", title: "Keyboard shortcuts", keys: ["?"], run: openHelp },
+    ...["detect", "studio", "zones", "session", "copilot"].map((tab, index) => ({
+      id: `tab.${tab}`,
+      group: "Panels",
+      title: `Show ${tab[0].toUpperCase()}${tab.slice(1)}`,
+      keys: [String(index + 1)],
+      run: () => tabs.select(tab),
+    })),
+    { id: "copilot.ask", group: "Copilot", title: "Ask the copilot", keys: ["⌘", "↩"] },
+    { id: "copilot.clear", group: "Copilot", title: "Clear the copilot thread" },
+  ];
+  return commands.map((command) => ({ ...command, run: command.run || (() => runAction(command.id)) }));
+}
+
+function toggleMirror() {
+  update({ mirror: !settings.mirror });
+  els.mirrorToggle.checked = settings.mirror;
+  markLook("");
+  toast.show(settings.mirror ? "Mirror on" : "Mirror off");
+}
+
+function openHelp() {
+  renderShortcutSheet(els.shortcutList, [
+    { keys: ["⌘", "K"], title: "Command palette" },
+    { keys: ["Space"], title: "Pause or resume detection" },
+    { keys: ["S"], title: "Save a snapshot" },
+    { keys: ["F"], title: "Fullscreen monitor" },
+    { keys: ["Z"], title: "Draw a zone (Esc cancels)" },
+    { keys: ["D"], title: "Invisible on or off" },
+    { keys: ["B"], title: "Capture the background" },
+    { keys: ["P"], title: "Photo booth" },
+    { keys: ["M"], title: "Mirror the picture" },
+    { keys: ["1", "–", "5"], title: "Switch panels" },
+    { keys: ["⌘", "↩"], title: "Ask the copilot" },
+    { keys: ["?"], title: "This sheet" },
+  ]);
+  if (!els.helpDialog.open) {
+    els.helpDialog.showModal();
   }
-  selectCopilotProvider(provider, false);
-  document.querySelectorAll("[data-provider]").forEach((button) => {
-    button.addEventListener("click", () => selectCopilotProvider(button.dataset.provider));
-  });
-  elements.copilotKey?.addEventListener("change", () => {
-    const saved = readCopilotStore();
-    const keys = saved.keys && typeof saved.keys === "object" ? { ...saved.keys } : {};
-    keys[state.copilotProvider] = elements.copilotKey.value;
-    writeCopilotStore({ provider: state.copilotProvider, keys });
-  });
-  elements.copilotListen?.addEventListener("click", toggleCopilotListen);
-  elements.copilotAsk?.addEventListener("click", () => {
-    askCopilot().catch(() => {
-      elements.copilotStatus.textContent = "Copilot could not answer.";
-    });
-  });
-  document.querySelector("#diarySave")?.addEventListener("click", () => {
-    const blob = new Blob([diaryDocument(state.diary)], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "scene-diary.txt";
-    link.click();
-    URL.revokeObjectURL(url);
-  });
-  document.querySelector("#diaryClear")?.addEventListener("click", () => {
-    state.diary = [];
-    state.diaryLastLine = "";
-    renderDiary();
-  });
-  document.querySelector("#diaryAsk")?.addEventListener("click", () => {
-    const latest = state.diary[0]?.line;
-    if (!latest || !elements.copilotInput) {
-      if (elements.copilotStatus) {
-        elements.copilotStatus.textContent = "The diary is empty until the scene changes.";
+}
+
+function wireKeys() {
+  window.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      event.preventDefault();
+      if (palette.isOpen) {
+        palette.close();
+      } else {
+        palette.open();
       }
       return;
     }
-    elements.copilotInput.value = latest;
-    elements.copilotInput.focus();
-    elements.copilotStatus.textContent = "The latest diary line is in the box. Ask when you want a reply.";
-  });
-  elements.copilotInput?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target) || els.paletteDialog.open) {
+      return;
+    }
+    const key = event.key;
+    const tabKeys = { 1: "detect", 2: "studio", 3: "zones", 4: "session", 5: "copilot" };
+    if (key === " " && event.target.closest?.("button, [role=tab], a, summary, label")) {
+      return;
+    }
+    if (key === " ") {
       event.preventDefault();
-      askCopilot().catch(() => {
-        elements.copilotStatus.textContent = "Copilot could not answer.";
-      });
+      togglePause();
+    } else if (key === "Escape") {
+      if (state.roiDrawing) {
+        setRoiDrawing(false);
+        renderZones();
+        toast.show("Zone drawing cancelled");
+      }
+    } else if (tabKeys[key]) {
+      tabs.select(tabKeys[key]);
+    } else if (key === "?") {
+      event.preventDefault();
+      openHelp();
+    } else {
+      const lower = key.toLowerCase();
+      const map = {
+        s: () => snapshot(),
+        f: () => toggleFullscreen(),
+        z: () => startZoneDraw(),
+        d: () => setEffect(settings.studioEffect === "disappear" ? "none" : "disappear"),
+        b: () => runAction("studio.capturePlate"),
+        p: () => photoBooth(),
+        m: () => toggleMirror(),
+      };
+      if (map[lower]) {
+        event.preventDefault();
+        map[lower]();
+      }
     }
   });
 }
 
-bootCopilot();
+// ------------------------------------------------------------------ boot ---
+
+const tabs = createTabs($(".tabs"), {
+  onChange(id) {
+    update({ tab: id });
+    if (id === "session") {
+      requestAnimationFrame(renderCharts);
+    }
+    if (id === "copilot") {
+      copilot.renderThread();
+    }
+  },
+});
+
+const palette = createCommandPalette({
+  dialog: els.paletteDialog,
+  input: els.paletteInput,
+  list: els.paletteList,
+  getCommands: commandList,
+});
+
+const copilot = createCopilot({
+  els,
+  storage,
+  apiUrl,
+  toast,
+  serverAvailable: () => state.serverAvailable,
+  getSceneSummary: () => {
+    const entries = Object.entries(countLabels(state.detections));
+    return entries.length ? entries.map(([label, count]) => `${count} ${label}`).join(", ") : "nothing detected";
+  },
+  getFrameDataUrl: () => {
+    const picture = !els.studioCanvas.hidden ? els.studioCanvas : currentSource();
+    if (!picture) {
+      return null;
+    }
+    const size = sourceSize(picture);
+    const width = Math.min(1024, size.width);
+    const height = Math.round(width * (size.height / size.width));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext("2d").drawImage(picture, 0, 0, width, height);
+    for (const quality of [0.82, 0.7, 0.55]) {
+      const url = canvas.toDataURL("image/jpeg", quality);
+      if (url.length * 0.75 < MAX_IMAGE_BYTES) {
+        return url;
+      }
+    }
+    return null;
+  },
+});
+
+async function boot() {
+  if (new URLSearchParams(location.search).has("debug")) {
+    window.__rtd = { state, segmenter, glide, get settings() { return settings; } };
+  }
+  applyTheme(loadTheme(storage));
+  els.videoAppSelect.replaceChildren(...VIDEO_APPS.map((app) => h("option", { value: app.id }, app.name)));
+  syncControls();
+  renderClassPicker();
+  renderVideoAppGuide();
+  renderZones();
+  renderDiary();
+  tabs.select(settings.tab, { silent: true });
+  wireControls();
+  wireKeys();
+  updateTally();
+  syncTransport();
+  state.engineId = resolveEngine(settings.engine);
+  renderEngineList();
+  updateEngineUi();
+  requestAnimationFrame(renderLoop);
+
+  const health = await probeHealth();
+  if (health) {
+    state.serverAvailable = true;
+    const model = health.model || {};
+    state.yoloStatus = model.error ? "error" : model.mock ? "mock" : model.loaded ? "ready" : "loading";
+    state.yoloError = model.error || "";
+    if (!health.features?.virtualcam) {
+      els.virtualCamStatus.textContent = "The local server is running. Install OBS and requirements-virtualcam.txt for a camera device; the MJPEG feed works now.";
+    }
+    copilot.loadCatalog();
+  }
+  state.engineId = resolveEngine(settings.engine);
+  renderEngineList();
+  updateEngineUi();
+  copilot.renderThread();
+  els.lastUpdated.textContent = `Ready, v${VERSION}`;
+
+  // ?sample=desk|kitchen|street opens a sample straight away (shareable demo links).
+  const sample = new URLSearchParams(location.search).get("sample");
+  if (sample && SAMPLE_SCENES[sample]) {
+    loadSample(sample);
+  }
+}
+
 boot();
-renderStage();

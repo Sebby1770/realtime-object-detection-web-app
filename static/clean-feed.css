@@ -1,0 +1,66 @@
+@font-face {
+  font-family: "Saira";
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 50% 125%;
+  font-display: swap;
+  src: url("fonts/saira-latin.woff2") format("woff2");
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  background: #000;
+  color: #e8eaed;
+  font-family: "Saira", ui-sans-serif, system-ui, sans-serif;
+  cursor: default;
+}
+
+body.is-idle {
+  cursor: none;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.feed-label {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 6px 10px;
+  border-radius: 999px;
+  background: rgba(13, 15, 18, 0.82);
+  font-size: 13px;
+  font-weight: 560;
+  transition: opacity 240ms ease;
+}
+
+.feed-label[data-hidden="true"] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.feed-lamp {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #7d858f;
+}
+
+.feed-label[data-live="true"] .feed-lamp {
+  background: #ff4b3e;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feed-label {
+    transition: none;
+  }
+}

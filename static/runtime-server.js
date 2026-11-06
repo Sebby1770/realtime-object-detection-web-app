@@ -1,6 +1,8 @@
+/** WebSocket client for the local FastAPI + YOLOv8 server. */
+
 const CLOSE_REASONS = {
-  1008: "Connection rejected: origin is not allowed.",
-  1013: "Server is busy. Try again later.",
+  1008: "The server refused this page's origin. Add it to WS_ALLOWED_ORIGINS.",
+  1013: "The server is busy with other tabs. Close one and try again.",
 };
 
 function websocketUrl() {
@@ -15,11 +17,21 @@ export function createServerRuntime(handlers = {}) {
   let attempt = 0;
   let reconnectTimer = null;
   let awaitingFrame = false;
+  let sentAt = 0;
+  let watchdog = null;
 
   function clearReconnect() {
     if (reconnectTimer) {
       window.clearTimeout(reconnectTimer);
       reconnectTimer = null;
+    }
+  }
+
+  function settle() {
+    awaitingFrame = false;
+    if (watchdog) {
+      window.clearTimeout(watchdog);
+      watchdog = null;
     }
   }
 
@@ -29,15 +41,14 @@ export function createServerRuntime(handlers = {}) {
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
       return;
     }
-
     socket = new WebSocket(websocketUrl());
     socket.binaryType = "arraybuffer";
-    handlers.onStatus?.("Connecting", false);
+    handlers.onStatus?.("connecting");
 
     socket.addEventListener("open", () => {
       attempt = 0;
-      awaitingFrame = false;
-      handlers.onStatus?.("Live", true);
+      settle();
+      handlers.onStatus?.("open");
       handlers.onOpen?.();
     });
 
@@ -52,17 +63,18 @@ export function createServerRuntime(handlers = {}) {
         return;
       }
       if (payload.type === "detections") {
-        awaitingFrame = false;
+        payload.rtt_ms = Math.round((performance.now() - sentAt) * 10) / 10;
+        settle();
         handlers.onDetections?.(payload);
         return;
       }
-      if (payload.type === "error" || payload.type === "dropped") {
-        awaitingFrame = false;
-        handlers.onNotice?.(payload.message || payload.type);
+      if (payload.type === "throttled" || payload.type === "dropped") {
+        settle();
         return;
       }
-      if (payload.type === "config_ack") {
-        handlers.onNotice?.("Model config applied");
+      if (payload.type === "error") {
+        settle();
+        handlers.onError?.(payload.message || "The server could not process that frame.", payload.code || "");
         return;
       }
       if (payload.type === "roi_alert_ack") {
@@ -71,25 +83,19 @@ export function createServerRuntime(handlers = {}) {
     });
 
     socket.addEventListener("close", (event) => {
-      awaitingFrame = false;
-      const reason = CLOSE_REASONS[event.code];
+      settle();
       if (closedByUser) {
-        handlers.onStatus?.("Offline", false);
+        handlers.onStatus?.("closed");
         return;
       }
+      const reason = CLOSE_REASONS[event.code];
       if (reason) {
-        handlers.onNotice?.(reason);
-        handlers.onStatus?.(reason, false);
-      } else {
-        handlers.onStatus?.("Reconnecting", false);
+        handlers.onError?.(reason, `close_${event.code}`);
       }
+      handlers.onStatus?.("reconnecting");
       const delay = Math.min(8000, 400 * 2 ** attempt);
       attempt += 1;
       reconnectTimer = window.setTimeout(connect, delay);
-    });
-
-    socket.addEventListener("error", () => {
-      handlers.onStatus?.("Socket error", false);
     });
   }
 
@@ -102,33 +108,29 @@ export function createServerRuntime(handlers = {}) {
         socket.close();
         socket = null;
       }
-      awaitingFrame = false;
-      handlers.onStatus?.("Offline", false);
+      settle();
+      handlers.onStatus?.("closed");
     },
     sendConfig(config) {
       if (socket?.readyState !== WebSocket.OPEN) {
         return;
       }
-      socket.send(
-        JSON.stringify({
-          type: "config",
-          confidence: config.confidence,
-          classes: config.classes,
-        }),
-      );
+      socket.send(JSON.stringify({ type: "config", confidence: config.confidence, classes: config.classes }));
     },
     sendRoiAlert() {
-      if (socket?.readyState !== WebSocket.OPEN) {
-        return;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "roi_alert" }));
       }
-      socket.send(JSON.stringify({ type: "roi_alert" }));
     },
     sendFrame(buffer) {
       if (socket?.readyState !== WebSocket.OPEN || awaitingFrame) {
         return false;
       }
       awaitingFrame = true;
+      sentAt = performance.now();
       socket.send(buffer);
+      // A lost reply must not stall the loop forever.
+      watchdog = window.setTimeout(settle, 4000);
       return true;
     },
     get busy() {

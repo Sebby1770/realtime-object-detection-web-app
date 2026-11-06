@@ -1,17 +1,57 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  MASK_EFFECTS,
   VIDEO_APPS,
   effectTargets,
+  easeCrop,
   expandBox,
   autoFrameCrop,
   cleanNameplate,
   gradeFilter,
+  maskTrusted,
   photoStripSize,
+  plateReady,
   scaleBox,
+  usesMask,
   vanishLabelSet,
   videoAppGuide,
 } from "../static/studio.js";
+
+test("a person mask is trusted only when every band of every person is covered", () => {
+  assert.equal(maskTrusted([]), true);
+  assert.equal(maskTrusted([[0.7, 0.8, 0.75]]), true);
+  // A side-on cyclist: head and back missed by the selfie model.
+  assert.equal(maskTrusted([[0.05, 0.65, 0.67]]), false);
+  assert.equal(maskTrusted([[0.7, 0.8, 0.75], [0.1, 0.2, 0.15]]), false);
+  assert.equal(maskTrusted([[0.2, 0.25, 0.3]]), false);
+});
+
+test("the mask compositor runs for every effect except off", () => {
+  const mask = {};
+  for (const effect of MASK_EFFECTS) {
+    assert.equal(usesMask({ effect, mask }), true, effect);
+  }
+  assert.equal(usesMask({ effect: "none", mask }), false);
+  assert.equal(usesMask({ effect: "disappear", mask: null }), false);
+});
+
+test("auto frame eases toward its target crop", () => {
+  const next = { x: 100, y: 50, width: 400, height: 225 };
+  assert.deepEqual(easeCrop(null, next), next);
+  const eased = easeCrop({ x: 0, y: 0, width: 640, height: 360 }, next, 0.5);
+  assert.equal(eased.x, 50);
+  assert.equal(eased.width, 520);
+  assert.equal(easeCrop(next, null), null);
+});
+
+test("a plate is ready when captured, or after enough mask-guided learning", () => {
+  assert.equal(plateReady(null), false);
+  assert.equal(plateReady({ seeded: true, captured: true, known: {}, learned: 0 }), true);
+  assert.equal(plateReady({ seeded: true, captured: false, known: {}, learned: 10 }), false);
+  assert.equal(plateReady({ seeded: true, captured: false, known: {}, learned: 400 }), true);
+  assert.equal(plateReady({ seeded: true, captured: false, known: null }), true);
+});
 
 test("photo strip grows with each shot and keeps a footer", () => {
   const one = photoStripSize(1, 100, 50, 10, 20);
