@@ -1,6 +1,6 @@
 [project]
 name = "realtime-object-detection-web-app"
-version = "2.1.0"
+version = "3.0.0"
 description = "Dual-runtime realtime object detection: FastAPI + YOLOv8 or in-browser coco-ssd."
 readme = "README.md"
 license = { text = "MIT" }
@@ -10,3 +10,10 @@ requires-python = ">=3.11"
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

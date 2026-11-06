@@ -1,24 +1,47 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import itertools
 import json
 import os
+import threading
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated, Any
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.copilot import CopilotError, ask_copilot, provider_catalog
-from app.detector import clamp_confidence, detect_objects, model_info
+from app import __version__
+from app.copilot import (
+    MAX_IMAGE_BYTES,
+    CopilotError,
+    ask_prepared,
+    prepare_call,
+    provider_catalog,
+    stream_copilot,
+)
+from app.detector import (
+    ModelUnavailable,
+    clamp_confidence,
+    detect_objects,
+    env_flag,
+    model_info,
+    model_status,
+    warmup,
+)
 from app.stats import SessionStats
 from app.tracker import SimpleTracker
 from app.virtualcam import StudioBridge
 
-
-APP_VERSION = "2.8.0"
+APP_VERSION = __version__
 STUDIO_FRAME_BYTES = int(os.getenv("STUDIO_FRAME_BYTES", str(2 * 1024 * 1024)))
 studio_bridge = StudioBridge()
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -27,16 +50,73 @@ DEFAULT_ALLOWED_ORIGINS = {
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 }
+DEFAULT_ALLOWED_HOSTS = "localhost,127.0.0.1,testserver"
+ALLOWED_HOSTS = [
+    host.strip() for host in os.getenv("ALLOWED_HOSTS", DEFAULT_ALLOWED_HOSTS).split(",") if host.strip()
+] or ["*"]
 MAX_FRAME_BYTES = int(os.getenv("MAX_FRAME_BYTES", str(512 * 1024)))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))
+MAX_BATCH_IMAGES = int(os.getenv("MAX_BATCH_IMAGES", "12"))
 MIN_FRAME_INTERVAL_SECONDS = float(os.getenv("MIN_FRAME_INTERVAL_SECONDS", "0.08"))
 MAX_WS_CONNECTIONS = int(os.getenv("MAX_WS_CONNECTIONS", "4"))
+MAX_COPILOT_BODY_BYTES = int(2.5 * 1024 * 1024)
+MAX_COPILOT_IN_FLIGHT = 2
+COPILOT_TIMEOUT_SECONDS = 90.0
 ACTIVE_CONNECTIONS = 0
+
+SECURITY_HEADERS: list[tuple[bytes, bytes]] = [
+    (b"x-content-type-options", b"nosniff"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"x-frame-options", b"DENY"),
+    (b"permissions-policy", b"camera=(self), microphone=(self), display-capture=(), geolocation=()"),
+    (b"cross-origin-opener-policy", b"same-origin"),
+]
+
+
+class SecurityHeadersMiddleware:
+    """Pure ASGI middleware so SSE and MJPEG responses are never buffered."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        is_index = scope.get("method") == "GET" and scope.get("path") == "/"
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = [
+                    (name, value)
+                    for name, value in message.get("headers", [])
+                    if name.lower() not in {key for key, _ in SECURITY_HEADERS}
+                    and not (is_index and name.lower() == b"cache-control")
+                ]
+                headers.extend(SECURITY_HEADERS)
+                if is_index:
+                    headers.append((b"cache-control", b"no-cache"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    if env_flag("YOLO_WARMUP", default=True):
+        threading.Thread(target=warmup, name="yolo-warmup", daemon=True).start()
+    yield
+
 
 app = FastAPI(
     title="Real-Time Object Detection",
-    description="Dual-runtime live object detection with an invisible studio effect and a Grok, ChatGPT, or Claude copilot.",
+    description=(
+        "Dual-runtime live object detection with an invisible studio effect "
+        "and a Grok, ChatGPT, or Claude copilot."
+    ),
     version=APP_VERSION,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -50,8 +130,15 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.exception_handler(ModelUnavailable)
+async def model_unavailable_handler(_request: Request, exc: ModelUnavailable) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 def allowed_origins() -> set[str]:
@@ -83,48 +170,124 @@ async def index() -> FileResponse:
     return FileResponse(BASE_DIR / "index.html")
 
 
+def virtualcam_installed() -> bool:
+    try:
+        return importlib.util.find_spec("pyvirtualcam") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 @app.get("/health")
-async def health() -> dict[str, str | int]:
+async def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "version": APP_VERSION,
         "active_connections": ACTIVE_CONNECTIONS,
         "max_connections": MAX_WS_CONNECTIONS,
+        "model": model_status(),
+        "features": {
+            "virtualcam": virtualcam_installed(),
+            "copilot": True,
+            "copilot_streaming": True,
+        },
     }
 
 
 @app.get("/api/model")
 async def model_metadata() -> dict[str, object]:
-    return model_info()
+    try:
+        return await asyncio.to_thread(model_info)
+    except ModelUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/copilot")
 async def copilot_catalog() -> dict[str, object]:
-    return {"providers": provider_catalog()}
+    return {"providers": provider_catalog(), "streaming": True, "max_image_bytes": MAX_IMAGE_BYTES}
+
+
+_COPILOT_SLOTS: dict[int, float] = {}
+_COPILOT_TOKENS = itertools.count(1)
+
+
+def _acquire_copilot_slot() -> int:
+    now = time.monotonic()
+    # A slot whose holder vanished (for example a stream cancelled before it
+    # started) expires instead of blocking the copilot forever.
+    for token, started in list(_COPILOT_SLOTS.items()):
+        if now - started > COPILOT_TIMEOUT_SECONDS + 30:
+            _COPILOT_SLOTS.pop(token, None)
+    if len(_COPILOT_SLOTS) >= MAX_COPILOT_IN_FLIGHT:
+        raise HTTPException(status_code=429, detail="The copilot is still answering. Try again in a moment.")
+    token = next(_COPILOT_TOKENS)
+    _COPILOT_SLOTS[token] = now
+    return token
+
+
+def _release_copilot_slot(token: int) -> None:
+    _COPILOT_SLOTS.pop(token, None)
+
+
+async def read_copilot_body(request: Request) -> object:
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="Send JSON with Content-Type: application/json.")
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > MAX_COPILOT_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="That request is too large.")
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > MAX_COPILOT_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="That request is too large.")
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Expected JSON.") from exc
 
 
 @app.post("/api/copilot")
 async def copilot_ask(request: Request) -> dict[str, str]:
+    body = await read_copilot_body(request)
     try:
-        body = await request.json()
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail="Expected JSON.") from exc
-    if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Expected a JSON object.")
-    try:
-        return await asyncio.to_thread(
-            ask_copilot,
-            str(body.get("provider") or ""),
-            str(body.get("apiKey") or ""),
-            body.get("messages"),
-        )
+        call = prepare_call(body)
     except CopilotError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    token = _acquire_copilot_slot()
+    try:
+        return await asyncio.to_thread(ask_prepared, call, COPILOT_TIMEOUT_SECONDS)
+    except CopilotError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    finally:
+        _release_copilot_slot(token)
+
+
+@app.post("/api/copilot/stream")
+async def copilot_stream(request: Request) -> StreamingResponse:
+    body = await read_copilot_body(request)
+    try:
+        call = prepare_call(body, stream=True)
+    except CopilotError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message) from exc
+    token = _acquire_copilot_slot()
+
+    async def events() -> AsyncIterator[str]:
+        try:
+            async for chunk in stream_copilot(call, COPILOT_TIMEOUT_SECONDS):
+                yield chunk
+        finally:
+            _release_copilot_slot(token)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/detect")
 async def detect_upload(
-    image: UploadFile = File(...),
+    image: Annotated[UploadFile, File()],
     confidence: float | None = None,
 ) -> dict[str, object]:
     frame_bytes = await image.read()
@@ -135,14 +298,14 @@ async def detect_upload(
 
 @app.post("/api/detect/batch")
 async def detect_batch(
-    images: list[UploadFile] = File(...),
+    images: Annotated[list[UploadFile], File()],
     confidence: float | None = None,
 ) -> dict[str, object]:
     if not images:
         raise HTTPException(status_code=400, detail="Empty image upload.")
     results: list[dict[str, object]] = []
     threshold = clamp_confidence(confidence)
-    for upload in images[:12]:
+    for upload in images[:MAX_BATCH_IMAGES]:
         frame_bytes = await upload.read()
         if not frame_bytes:
             raise HTTPException(status_code=400, detail="Empty image upload.")
@@ -152,7 +315,11 @@ async def detect_batch(
         results.append(payload)
     if not results:
         raise HTTPException(status_code=400, detail="Empty image upload.")
-    return {"count": len(results), "results": results}
+    return {
+        "count": len(results),
+        "results": results,
+        "skipped": max(0, len(images) - MAX_BATCH_IMAGES),
+    }
 
 
 @app.get("/api/stats")
@@ -224,6 +391,7 @@ async def detect_socket(websocket: WebSocket) -> None:
     processing = False
     tracker = SimpleTracker()
     session_stats = SessionStats()
+    frame_id = 0
 
     try:
         while True:
@@ -293,19 +461,22 @@ async def detect_socket(websocket: WebSocket) -> None:
                 if started - last_frame_at < MIN_FRAME_INTERVAL_SECONDS:
                     await websocket.send_json(
                         {
-                            "type": "error",
+                            "type": "throttled",
                             "message": "Frame rate is too high.",
                         }
                     )
                     continue
                 last_frame_at = started
                 processing = True
+                frame_id += 1
                 payload = await detect_objects(
                     frame,
                     confidence=confidence_threshold,
                     class_filter=class_filter,
                     tracker=tracker,
                 )
+                payload["frame_id"] = frame_id
+                payload.setdefault("inference_ms", None)
                 payload["latency_ms"] = round(
                     (time.perf_counter() - started) * 1000,
                     1,
@@ -320,6 +491,9 @@ async def detect_socket(websocket: WebSocket) -> None:
                 processing = False
             except WebSocketDisconnect:
                 raise
+            except ModelUnavailable as exc:
+                processing = False
+                await websocket.send_json({"type": "error", "code": "model_unavailable", "message": str(exc)})
             except Exception:
                 processing = False
                 try:

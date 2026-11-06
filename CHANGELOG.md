@@ -1,5 +1,44 @@
 # Changelog
 
+## 3.0.0 — 2026-11-06
+
+A new interface and a deeper engine. Everything from 2.8 is still here.
+
+### Added
+- **New interface.** The page opens on the monitor itself. A tally lamp says whether the outgoing picture is idle, in preview, or on air, and a readout strip shows the engine, source, rate, latency, and object count. Controls live in five tabs: Detect, Studio, Zones, Session, Copilot. Light, dark, or match-system theme.
+- **Command palette** (⌘K / Ctrl+K) for every action, a **shortcut sheet** (?), toasts for confirmations and errors, number keys 1–5 for the panels, and `Z` to draw a zone.
+- **Sharper browser detection.** EfficientDet-Lite0 (the new default without a server) and EfficientDet-Lite2 run through MediaPipe, on the GPU with a CPU fallback. On the bundled samples they find objects COCO-SSD missed (a phone, a book, apples), with higher confidence. COCO-SSD Lite stays as the fallback. YOLOv8 on the local server is still the most accurate.
+- **Person masks for the studio.** A MediaPipe segmenter cuts along the body instead of the box. Invisible learns the room as you move and fills the gap from it. Without a learned background it fills from the room's colours, not a blurred silhouette. People the mask can't see well, for example far away or side-on, fall back to a soft box mask automatically.
+- **Smooth box motion.** Boxes glide between detections instead of jumping, and fade out when something leaves. Snaps instead under reduced motion.
+- **Label colours from the ColorChecker chart.** The same class always gets the same colour, and every label tag passes WCAG AA contrast. Tags no longer overlap one another, and no box outline is drawn across a label.
+- **Copilot streaming.** Replies stream in, can be stopped, and render as safe Markdown. Each provider has a model picker with suggestions. **Attach a still of the picture** is opt-in, off by default. Defaults: `grok-4.7` (xAI Responses API), `chat-latest` (OpenAI), `claude-opus-5-5` (Anthropic). Claude requests send `anthropic-version: 2026-10-21` and server-side refusal fallbacks on the models that support them.
+- **Simulated detector.** `python -m app --mock` runs the server without Ultralytics. Useful for trying the UI and for tests.
+- `python -m app` launcher. `/health` reports model status and features. YOLO weights warm up in the background at startup.
+- Zone list with live counts, per-zone alert totals, and remove buttons. A screen-reader summary of what is in frame. Social card and favicon. `?sample=desk|kitchen|street` links open a sample straight away.
+
+### Changed
+- The tracker matches greedily by IoU across all pairs and predicts motion with a constant-velocity model, so fast movers keep their IDs. Python and JavaScript share one algorithm and one test fixture.
+- The clean-feed window hides its label once frames arrive, so the label never appears in a shared picture. Double-click toggles full screen.
+- While the clean feed, the virtual camera, or a recording is running, the studio keeps drawing when the browser stops animation frames for a covered window.
+- Studio compositing reuses canvases instead of allocating several per frame. Blurs run at half size.
+- Sample images no longer carry a watermark.
+- The settings store validates everything it reads back and migrates 2.x settings.
+
+### Fixed
+- The stage no longer covers the controls while you scroll.
+- Portrait blur, Replace background, and Pixelate lined up wrongly when the camera was wider than the studio picture.
+- The copilot and the virtual camera used root-relative URLs that broke under a sub-path.
+- The batch endpoint silently dropped images past the twelfth. It now reports `skipped`.
+- `/api/model` blocked the event loop while weights loaded.
+
+### Security
+- A Content-Security-Policy on every page. Scripts come only from this site and jsDelivr; connections only to the model hosts. This also blocks MediaPipe's usage logging.
+- The local server checks the `Host` header (`ALLOWED_HOSTS`, a DNS-rebinding guard) and sends `nosniff`, `no-referrer`, `DENY` framing, a Permissions-Policy, and COOP headers.
+- Copilot endpoints accept only `application/json` (415 otherwise), cap the body size (413), and allow two calls in flight (429). Keys are never logged or echoed, and xAI requests ask the provider not to store them (`store: false`).
+
+### Versions
+- Application **3.0.0** everywhere: `app/__init__.py`, `package.json`, `pyproject.toml`, `static/app.js`, and the asset cache-busting in `index.html`. A test keeps them in step.
+
 ## 2.8.0 — 2026-11-05
 
 ### Added
