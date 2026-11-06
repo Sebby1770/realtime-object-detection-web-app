@@ -535,3 +535,15 @@ def test_non_stream_provider_error_does_not_echo_the_key(monkeypatch) -> None:
     )
     assert response.status_code == 400
     assert "sk-ant-secret" not in response.text
+
+
+def test_history_keeps_line_breaks_but_collapses_spaces() -> None:
+    turns = conversation(
+        [
+            {"role": "user", "content": "List it"},
+            {"role": "assistant", "content": "Here:\n\n\n\n- one   item\n- two\r\n\n```\ncode\n```"},
+            {"role": "user", "content": "  thanks   "},
+        ]
+    )
+    assert turns[1]["content"] == "Here:\n\n- one item\n- two\n\n```\ncode\n```"
+    assert turns[2]["content"] == "thanks"

@@ -7,6 +7,7 @@ import json
 import os
 import threading
 import time
+import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -57,7 +58,8 @@ ALLOWED_HOSTS = [
 MAX_FRAME_BYTES = int(os.getenv("MAX_FRAME_BYTES", str(512 * 1024)))
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(8 * 1024 * 1024)))
 MAX_BATCH_IMAGES = int(os.getenv("MAX_BATCH_IMAGES", "12"))
-MIN_FRAME_INTERVAL_SECONDS = float(os.getenv("MIN_FRAME_INTERVAL_SECONDS", "0.08"))
+# 0.06 s lets the UI's 15 detections-per-second setting through.
+MIN_FRAME_INTERVAL_SECONDS = float(os.getenv("MIN_FRAME_INTERVAL_SECONDS", "0.06"))
 MAX_WS_CONNECTIONS = int(os.getenv("MAX_WS_CONNECTIONS", "4"))
 MAX_COPILOT_BODY_BYTES = int(2.5 * 1024 * 1024)
 MAX_COPILOT_IN_FLIGHT = 2
@@ -70,6 +72,8 @@ SECURITY_HEADERS: list[tuple[bytes, bytes]] = [
     (b"x-frame-options", b"DENY"),
     (b"permissions-policy", b"camera=(self), microphone=(self), display-capture=(), geolocation=()"),
     (b"cross-origin-opener-policy", b"same-origin"),
+    # Other sites cannot embed /api/studio.mjpg or snapshots in an <img>; OBS and same-origin pages are unaffected.
+    (b"cross-origin-resource-policy", b"same-origin"),
 ]
 
 
@@ -278,8 +282,12 @@ async def copilot_stream(request: Request) -> StreamingResponse:
         finally:
             _release_copilot_slot(token)
 
+    stream = events()
+    # A client that disconnects before the body starts (Stop right after Ask) never runs the
+    # generator, so its finally never fires; the finalizer still frees the slot.
+    weakref.finalize(stream, _release_copilot_slot, token)
     return StreamingResponse(
-        events(),
+        stream,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -406,6 +414,8 @@ async def detect_socket(websocket: WebSocket) -> None:
                     payload = json.loads(message["text"])
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(payload, dict):
+                    continue
                 message_type = payload.get("type")
                 if message_type == "config":
                     if "confidence" in payload:
@@ -414,7 +424,8 @@ async def detect_socket(websocket: WebSocket) -> None:
                         except (TypeError, ValueError):
                             pass
                     if "classes" in payload:
-                        class_filter = [str(value) for value in payload["classes"]]
+                        classes = payload["classes"]
+                        class_filter = [str(value) for value in classes][:80] if isinstance(classes, list) else None
                     await websocket.send_json(
                         {
                             "type": "config_ack",

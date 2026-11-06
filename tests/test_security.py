@@ -72,3 +72,52 @@ def test_copilot_limits_calls_in_flight(monkeypatch: pytest.MonkeyPatch) -> None
     )
     assert response.status_code == 429
     assert response.json()["detail"] == "The copilot is still answering. Try again in a moment."
+
+
+def test_cross_origin_resource_policy_blocks_embedding_elsewhere() -> None:
+    client = TestClient(main.app)
+    for path in ("/", "/health", "/api/virtualcam/status"):
+        assert client.get(path).headers["cross-origin-resource-policy"] == "same-origin"
+
+
+def test_copilot_slot_is_released_when_the_stream_never_starts() -> None:
+    """Stop right after Ask can cancel the response before its body runs; the slot must not leak."""
+    import asyncio
+    import gc
+    import json
+
+    from starlette.requests import Request
+
+    body = json.dumps(
+        {"provider": "anthropic", "apiKey": "sk-ant-test-123456", "messages": [{"role": "user", "content": "hi"}]}
+    ).encode()
+
+    async def receive() -> dict:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/api/copilot/stream",
+        "headers": [(b"content-type", b"application/json")],
+        "query_string": b"",
+    }
+    main._COPILOT_SLOTS.clear()
+    response = asyncio.run(main.copilot_stream(Request(scope, receive)))
+    assert len(main._COPILOT_SLOTS) == 1
+    del response
+    gc.collect()
+    assert main._COPILOT_SLOTS == {}
+
+
+def test_websocket_survives_malformed_config_messages() -> None:
+    client = TestClient(main.app)
+    with client.websocket_connect("/ws/detect", headers={"origin": "http://127.0.0.1:8000"}) as websocket:
+        websocket.send_text("[1, 2, 3]")
+        websocket.send_text('"just a string"')
+        websocket.send_json({"type": "config", "classes": None})
+        ack = websocket.receive_json()
+        assert ack["type"] == "config_ack"
+        assert ack["classes"] is None
+        websocket.send_json({"type": "config", "classes": ["person"]})
+        assert websocket.receive_json()["classes"] == ["person"]

@@ -513,6 +513,10 @@ function attachSource(source) {
 
 function detachSource() {
   clearTimeout(state.loopTimer);
+  // Finish and save a running clip rather than recording a frozen picture.
+  if (state.recorder && state.recorder.state !== "inactive") {
+    state.recorder.stop();
+  }
   serverRuntime?.disconnect();
   clearStageMedia();
   state.source = null;
@@ -861,6 +865,9 @@ async function runStill() {
       const payload = await response.json();
       if (!response.ok) {
         throw new Error(payload.detail || "The server could not check that image.");
+      }
+      if (state.source?.element !== still) {
+        return; // another source was opened while this one was being checked
       }
       payload.rtt_ms = Math.round((performance.now() - started) * 10) / 10;
       const wanted = settings.selectedClasses.length ? new Set(settings.selectedClasses) : null;
@@ -2152,7 +2159,14 @@ function wireKeys() {
       }
       return;
     }
-    if (event.metaKey || event.ctrlKey || event.altKey || isTypingTarget(event.target) || els.paletteDialog.open) {
+    if (
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      isTypingTarget(event.target) ||
+      els.paletteDialog.open ||
+      els.helpDialog.open
+    ) {
       return;
     }
     const key = event.key;

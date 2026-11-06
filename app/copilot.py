@@ -105,6 +105,12 @@ def redact(text: str, secret: str) -> str:
     return " ".join(cleaned.split())[:240]
 
 
+def _tidy(text: str) -> str:
+    """Collapse runs of spaces but keep line breaks, so lists and code in earlier replies survive."""
+    lines = [" ".join(line.split()) for line in text.replace("\r\n", "\n").split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def conversation(messages: object) -> list[dict[str, str]]:
     if not isinstance(messages, list):
         raise CopilotError(400, "Messages must be a list.")
@@ -116,7 +122,7 @@ def conversation(messages: object) -> list[dict[str, str]]:
         content = message.get("content")
         if role not in {"user", "assistant"} or not isinstance(content, str):
             continue
-        text = " ".join(content.split())[:MAX_CHARS]
+        text = _tidy(content)[:MAX_CHARS]
         if not text:
             continue
         if cleaned and cleaned[-1]["role"] == role:

@@ -216,6 +216,8 @@ export function createCopilot({ els, storage, apiUrl, toast, getSceneSummary, ge
   function setBusy(busy) {
     els.copilotAsk.textContent = busy ? "Stop" : "Ask";
     els.copilotAsk.dataset.state = busy ? "stop" : "";
+    // While a reply streams in, screen readers wait for the finished message instead of re-reading the thread.
+    els.copilotThread.setAttribute("aria-busy", busy ? "true" : "false");
   }
 
   async function ask() {

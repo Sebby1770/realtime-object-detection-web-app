@@ -113,7 +113,7 @@ Environment variables for the local server:
 | `MAX_FRAME_BYTES` | `524288` | Largest WebSocket frame |
 | `MAX_UPLOAD_BYTES` | `8388608` | Largest uploaded image |
 | `MAX_BATCH_IMAGES` | `12` | Images per batch request; extra ones are reported as `skipped` |
-| `MIN_FRAME_INTERVAL_SECONDS` | `0.08` | Per-connection frame-rate limit |
+| `MIN_FRAME_INTERVAL_SECONDS` | `0.06` | Per-connection frame-rate limit, enough for the 15-per-second setting |
 | `MAX_WS_CONNECTIONS` | `4` | Concurrent detection sockets |
 | `STUDIO_FRAME_BYTES` | `2097152` | Largest virtual-camera frame |
 | `COPILOT_GROK_MODEL` | `grok-4.7` | Default xAI model |

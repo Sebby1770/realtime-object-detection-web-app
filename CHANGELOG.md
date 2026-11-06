@@ -30,10 +30,15 @@ A new interface and a deeper engine. Everything from 2.8 is still here.
 - The copilot and the virtual camera used root-relative URLs that broke under a sub-path.
 - The batch endpoint silently dropped images past the twelfth. It now reports `skipped`.
 - `/api/model` blocked the event loop while weights loaded.
+- Pressing Stop right after Ask could hold a copilot slot for two minutes. Two such presses locked the copilot.
+- A malformed WebSocket message (a JSON array, or `classes: null`) closed the detection socket.
+- Closing the source during a recording left the recorder capturing a frozen picture. The clip is now saved.
+- Copilot history flattened earlier replies onto one line. Lists and code now keep their line breaks.
+- In server mode, a still could show results from the previous image when two were opened quickly.
 
 ### Security
 - A Content-Security-Policy on every page. Scripts come only from this site and jsDelivr; connections only to the model hosts. This also blocks MediaPipe's usage logging.
-- The local server checks the `Host` header (`ALLOWED_HOSTS`, a DNS-rebinding guard) and sends `nosniff`, `no-referrer`, `DENY` framing, a Permissions-Policy, and COOP headers.
+- The local server checks the `Host` header (`ALLOWED_HOSTS`, a DNS-rebinding guard). It sends `nosniff`, `no-referrer`, `DENY` framing, a Permissions-Policy, COOP, and `Cross-Origin-Resource-Policy: same-origin`, so other sites cannot embed the studio feed.
 - Copilot endpoints accept only `application/json` (415 otherwise), cap the body size (413), and allow two calls in flight (429). Keys are never logged or echoed, and xAI requests ask the provider not to store them (`store: false`).
 
 ### Versions
