@@ -1,0 +1,656 @@
+{
+ "cases": [
+  {
+   "name": "two people crossing",
+   "options": {
+    "iou_threshold": 0.3,
+    "trail_length": 16,
+    "ttl_frames": 8,
+    "velocity_smoothing": 0.5
+   },
+   "frames": [
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 0,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 200,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 20,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 180,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 40,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 160,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 60,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 140,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 80,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 120,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 100,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 100,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 120,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 80,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 140,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 60,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 160,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 40,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 180,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 20,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ],
+    [
+     {
+      "label": "person",
+      "box": {
+       "x": 200,
+       "y": 10,
+       "width": 40,
+       "height": 80
+      }
+     },
+     {
+      "label": "person",
+      "box": {
+       "x": 0,
+       "y": 30,
+       "width": 40,
+       "height": 80
+      }
+     }
+    ]
+   ],
+   "expected_track_ids": [
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ],
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  {
+   "name": "fast mover kept by velocity prediction",
+   "options": {
+    "iou_threshold": 0.3,
+    "trail_length": 16,
+    "ttl_frames": 8,
+    "velocity_smoothing": 0.5
+   },
+   "frames": [
+    [
+     {
+      "label": "car",
+      "box": {
+       "x": 0,
+       "y": 50,
+       "width": 40,
+       "height": 40
+      }
+     }
+    ],
+    [
+     {
+      "label": "car",
+      "box": {
+       "x": 10,
+       "y": 50,
+       "width": 40,
+       "height": 40
+      }
+     }
+    ],
+    [
+     {
+      "label": "car",
+      "box": {
+       "x": 25,
+       "y": 50,
+       "width": 40,
+       "height": 40
+      }
+     }
+    ],
+    [
+     {
+      "label": "car",
+      "box": {
+       "x": 45,
+       "y": 50,
+       "width": 40,
+       "height": 40
+      }
+     }
+    ],
+    [
+     {
+      "label": "car",
+      "box": {
+       "x": 70,
+       "y": 50,
+       "width": 40,
+       "height": 40
+      }
+     }
+    ],
+    [
+     {
+      "label": "car",
+      "box": {
+       "x": 100,
+       "y": 50,
+       "width": 40,
+       "height": 40
+      }
+     }
+    ],
+    [
+     {
+      "label": "car",
+      "box": {
+       "x": 130,
+       "y": 50,
+       "width": 40,
+       "height": 40
+      }
+     }
+    ],
+    [
+     {
+      "label": "car",
+      "box": {
+       "x": 160,
+       "y": 50,
+       "width": 40,
+       "height": 40
+      }
+     }
+    ],
+    [
+     {
+      "label": "car",
+      "box": {
+       "x": 190,
+       "y": 50,
+       "width": 40,
+       "height": 40
+      }
+     }
+    ]
+   ],
+   "expected_track_ids": [
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     1
+    ]
+   ]
+  },
+  {
+   "name": "three frame dropout then return",
+   "options": {
+    "iou_threshold": 0.3,
+    "trail_length": 16,
+    "ttl_frames": 4,
+    "velocity_smoothing": 0.5
+   },
+   "frames": [
+    [
+     {
+      "label": "dog",
+      "box": {
+       "x": 100,
+       "y": 100,
+       "width": 50,
+       "height": 90
+      }
+     }
+    ],
+    [
+     {
+      "label": "dog",
+      "box": {
+       "x": 100,
+       "y": 100,
+       "width": 50,
+       "height": 90
+      }
+     }
+    ],
+    [],
+    [],
+    [],
+    [
+     {
+      "label": "dog",
+      "box": {
+       "x": 104,
+       "y": 100,
+       "width": 50,
+       "height": 90
+      }
+     }
+    ]
+   ],
+   "expected_track_ids": [
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [],
+    [],
+    [],
+    [
+     1
+    ]
+   ]
+  },
+  {
+   "name": "track expires after ttl",
+   "options": {
+    "iou_threshold": 0.3,
+    "trail_length": 16,
+    "ttl_frames": 2,
+    "velocity_smoothing": 0.5
+   },
+   "frames": [
+    [
+     {
+      "label": "dog",
+      "box": {
+       "x": 100,
+       "y": 100,
+       "width": 50,
+       "height": 90
+      }
+     }
+    ],
+    [],
+    [],
+    [
+     {
+      "label": "dog",
+      "box": {
+       "x": 100,
+       "y": 100,
+       "width": 50,
+       "height": 90
+      }
+     }
+    ]
+   ],
+   "expected_track_ids": [
+    [
+     1
+    ],
+    [],
+    [],
+    [
+     2
+    ]
+   ]
+  },
+  {
+   "name": "same label tie-break prefers lower track id",
+   "options": {
+    "iou_threshold": 0.3,
+    "trail_length": 16,
+    "ttl_frames": 8,
+    "velocity_smoothing": 0.5
+   },
+   "frames": [
+    [
+     {
+      "label": "cup",
+      "box": {
+       "x": 0,
+       "y": 0,
+       "width": 20,
+       "height": 20
+      }
+     },
+     {
+      "label": "cup",
+      "box": {
+       "x": 20,
+       "y": 0,
+       "width": 20,
+       "height": 20
+      }
+     }
+    ],
+    [
+     {
+      "label": "cup",
+      "box": {
+       "x": 10,
+       "y": 0,
+       "width": 20,
+       "height": 20
+      }
+     }
+    ],
+    [
+     {
+      "label": "cup",
+      "box": {
+       "x": 10,
+       "y": 0,
+       "width": 20,
+       "height": 20
+      }
+     },
+     {
+      "label": "cup",
+      "box": {
+       "x": 10,
+       "y": 0,
+       "width": 20,
+       "height": 20
+      }
+     }
+    ]
+   ],
+   "expected_track_ids": [
+    [
+     1,
+     2
+    ],
+    [
+     1
+    ],
+    [
+     1,
+     2
+    ]
+   ]
+  },
+  {
+   "name": "different labels never share a track",
+   "options": {
+    "iou_threshold": 0.3,
+    "trail_length": 16,
+    "ttl_frames": 8,
+    "velocity_smoothing": 0.5
+   },
+   "frames": [
+    [
+     {
+      "label": "cat",
+      "box": {
+       "x": 100,
+       "y": 100,
+       "width": 50,
+       "height": 90
+      }
+     }
+    ],
+    [
+     {
+      "label": "dog",
+      "box": {
+       "x": 100,
+       "y": 100,
+       "width": 50,
+       "height": 90
+      }
+     }
+    ],
+    [
+     {
+      "label": "cat",
+      "box": {
+       "x": 100,
+       "y": 100,
+       "width": 50,
+       "height": 90
+      }
+     }
+    ]
+   ],
+   "expected_track_ids": [
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     1
+    ]
+   ]
+  }
+ ]
+}

@@ -45,9 +45,7 @@ export async function resumeAudio() {
 }
 
 function playTone({ frequency, duration = 0.12, type = "square", gainValue = 0.18, pan = 0, startOffset = 0 }) {
-  if (prefersReducedMotion()) {
-    return;
-  }
+  // Sound is opt-in per control; reduced motion is about movement, not audio.
   const context = ensureAudio();
   if (!context || !masterGain) {
     return;
