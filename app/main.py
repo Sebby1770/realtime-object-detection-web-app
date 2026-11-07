@@ -15,9 +15,8 @@ from typing import Annotated, Any
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app import __version__
@@ -51,7 +50,7 @@ DEFAULT_ALLOWED_ORIGINS = {
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 }
-DEFAULT_ALLOWED_HOSTS = "localhost,127.0.0.1,testserver"
+DEFAULT_ALLOWED_HOSTS = "localhost,127.0.0.1,[::1],testserver"
 ALLOWED_HOSTS = [
     host.strip() for host in os.getenv("ALLOWED_HOSTS", DEFAULT_ALLOWED_HOSTS).split(",") if host.strip()
 ] or ["*"]
@@ -64,6 +63,9 @@ MAX_WS_CONNECTIONS = int(os.getenv("MAX_WS_CONNECTIONS", "4"))
 MAX_COPILOT_BODY_BYTES = int(2.5 * 1024 * 1024)
 MAX_COPILOT_IN_FLIGHT = 2
 COPILOT_TIMEOUT_SECONDS = 90.0
+# Slots are freed when their stream ends or is dropped; this only catches a leak nobody foresaw.
+# It must outlast the longest real answer (64k tokens can take many minutes).
+COPILOT_SLOT_SAFETY_SECONDS = 30 * 60
 ACTIVE_CONNECTIONS = 0
 
 SECURITY_HEADERS: list[tuple[bytes, bytes]] = [
@@ -75,6 +77,38 @@ SECURITY_HEADERS: list[tuple[bytes, bytes]] = [
     # Other sites cannot embed /api/studio.mjpg or snapshots in an <img>; OBS and same-origin pages are unaffected.
     (b"cross-origin-resource-policy", b"same-origin"),
 ]
+
+
+def host_name(header: str) -> str:
+    """The host part of a Host header, keeping IPv6 brackets: "[::1]:8000" -> "[::1]"."""
+    host = header.strip().lower()
+    if host.startswith("["):
+        end = host.find("]")
+        return host[: end + 1] if end != -1 else host
+    return host.split(":", 1)[0]
+
+
+class HostGuardMiddleware:
+    """DNS-rebinding guard: refuse requests whose Host is not on the allowlist. Understands [IPv6]:port."""
+
+    def __init__(self, app: ASGIApp, allowed_hosts: list[str]) -> None:
+        self.app = app
+        self.allowed = {host.strip().lower() for host in allowed_hosts if host.strip()}
+        self.allow_any = "*" in self.allowed
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self.allow_any or scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+        headers = dict(scope.get("headers") or [])
+        if host_name(headers.get(b"host", b"").decode("latin-1")) in self.allowed:
+            await self.app(scope, receive, send)
+            return
+        if scope["type"] == "websocket":
+            await receive()  # websocket.connect
+            await send({"type": "websocket.close", "code": status.WS_1008_POLICY_VIOLATION})
+            return
+        await PlainTextResponse("Invalid host header", status_code=400)(scope, receive, send)
 
 
 class SecurityHeadersMiddleware:
@@ -135,7 +169,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+app.add_middleware(HostGuardMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -152,11 +186,25 @@ def allowed_origins() -> set[str]:
     return {origin.strip().rstrip("/") for origin in configured.split(",") if origin.strip()}
 
 
+def is_same_origin(origin: str, host: str | None) -> bool:
+    """The page this server itself served (any port). Safe because the Host guard has already run."""
+    return bool(host) and origin.rstrip("/").split("://", 1)[-1].lower() == host.strip().lower()
+
+
 def is_allowed_origin(websocket: WebSocket) -> bool:
     origin = websocket.headers.get("origin")
     if not origin:
         return False
-    return origin.rstrip("/") in allowed_origins()
+    return origin.rstrip("/") in allowed_origins() or is_same_origin(origin, websocket.headers.get("host"))
+
+
+def reject_foreign_origin(request: Request) -> None:
+    """Browsers send Origin on POSTs. Another site's page must not drive the local copilot or camera bridge."""
+    origin = request.headers.get("origin")
+    if not origin or origin.rstrip("/") in allowed_origins():
+        return
+    if not is_same_origin(origin, request.headers.get("host")):
+        raise HTTPException(status_code=403, detail="This page's origin may not use the local server.")
 
 
 def validate_image_upload(upload: UploadFile, data: bytes) -> None:
@@ -216,10 +264,9 @@ _COPILOT_TOKENS = itertools.count(1)
 
 def _acquire_copilot_slot() -> int:
     now = time.monotonic()
-    # A slot whose holder vanished (for example a stream cancelled before it
-    # started) expires instead of blocking the copilot forever.
+    # A slot whose holder somehow never released it expires instead of blocking the copilot forever.
     for token, started in list(_COPILOT_SLOTS.items()):
-        if now - started > COPILOT_TIMEOUT_SECONDS + 30:
+        if now - started > COPILOT_SLOT_SAFETY_SECONDS:
             _COPILOT_SLOTS.pop(token, None)
     if len(_COPILOT_SLOTS) >= MAX_COPILOT_IN_FLIGHT:
         raise HTTPException(status_code=429, detail="The copilot is still answering. Try again in a moment.")
@@ -233,6 +280,7 @@ def _release_copilot_slot(token: int) -> None:
 
 
 async def read_copilot_body(request: Request) -> object:
+    reject_foreign_origin(request)
     content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if content_type != "application/json":
         raise HTTPException(status_code=415, detail="Send JSON with Content-Type: application/json.")
@@ -342,6 +390,10 @@ async def virtualcam_status() -> dict[str, object]:
 
 @app.post("/api/virtualcam/frame")
 async def virtualcam_frame(request: Request) -> dict[str, object]:
+    reject_foreign_origin(request)
+    # image/jpeg is not a CORS-safelisted type, so another site cannot send this as a no-preflight "simple" request.
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "image/jpeg":
+        raise HTTPException(status_code=415, detail="Send the frame as image/jpeg.")
     payload = await request.body()
     if not payload:
         raise HTTPException(status_code=400, detail="Empty frame.")

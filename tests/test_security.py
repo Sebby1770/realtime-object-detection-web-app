@@ -121,3 +121,82 @@ def test_websocket_survives_malformed_config_messages() -> None:
         assert ack["classes"] is None
         websocket.send_json({"type": "config", "classes": ["person"]})
         assert websocket.receive_json()["classes"] == ["person"]
+
+
+def test_host_guard_understands_bracketed_ipv6_and_rejects_others() -> None:
+    from app.main import host_name
+
+    assert host_name("[::1]:8000") == "[::1]"
+    assert host_name("LOCALHOST:8000") == "localhost"
+    assert host_name("127.0.0.1") == "127.0.0.1"
+    client = TestClient(main.app)
+    assert client.get("/health", headers={"host": "[::1]:8000"}).status_code == 200
+    assert client.get("/health", headers={"host": "evil.example:8000"}).status_code == 400
+
+
+def test_websocket_with_a_foreign_host_is_refused() -> None:
+    from starlette.websockets import WebSocketDisconnect
+
+    client = TestClient(main.app)
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws/detect", headers={"host": "evil.example", "origin": "http://evil.example"}):
+            pass
+
+
+def test_websocket_accepts_the_page_it_served_on_another_port() -> None:
+    client = TestClient(main.app)
+    headers = {"host": "localhost:9000", "origin": "http://localhost:9000"}
+    with client.websocket_connect("/ws/detect", headers=headers) as websocket:
+        websocket.send_json({"type": "config", "confidence": 0.5})
+        assert websocket.receive_json()["type"] == "config_ack"
+
+
+def test_other_sites_cannot_push_frames_into_the_virtual_camera() -> None:
+    main.studio_bridge.reset()
+    client = TestClient(main.app)
+    jpeg = b"\xff\xd8\xff\xd9"
+    simple = client.post(
+        "/api/virtualcam/frame", content=jpeg, headers={"content-type": "text/plain", "origin": "https://evil.example"}
+    )
+    assert simple.status_code in {403, 415}
+    foreign = client.post(
+        "/api/virtualcam/frame", content=jpeg, headers={"content-type": "image/jpeg", "origin": "https://evil.example"}
+    )
+    assert foreign.status_code == 403
+    assert main.studio_bridge.status()["frames"] == 0
+    own = client.post(
+        "/api/virtualcam/frame", content=jpeg, headers={"content-type": "image/jpeg", "origin": "http://testserver"}
+    )
+    assert own.status_code == 200
+    assert own.json()["frames"] == 1
+
+
+def test_copilot_refuses_a_foreign_origin() -> None:
+    client = TestClient(main.app)
+    response = client.post(
+        "/api/copilot/stream",
+        json={"provider": "grok", "apiKey": "xai-test-key", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"origin": "https://evil.example"},
+    )
+    assert response.status_code == 403
+
+
+def test_copilot_slots_outlast_long_answers() -> None:
+    assert main.COPILOT_SLOT_SAFETY_SECONDS >= 20 * 60
+
+
+def test_launcher_allows_the_host_it_binds(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    import types
+
+    from app import __main__ as launcher
+
+    calls = {}
+    monkeypatch.setitem(sys.modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: calls.update(k)))
+    monkeypatch.delenv("ALLOWED_HOSTS", raising=False)
+    launcher.main(["--host", "192.168.1.20", "--port", "9000"])
+    import os
+
+    assert "192.168.1.20" in os.environ["ALLOWED_HOSTS"].split(",")
+    assert calls["port"] == 9000
+    monkeypatch.delenv("ALLOWED_HOSTS", raising=False)

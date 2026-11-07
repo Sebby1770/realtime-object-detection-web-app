@@ -91,7 +91,9 @@ def test_virtualcam_bridge_accepts_jpeg_frames() -> None:
     assert posted.json()["frames"] == 1
     assert posted.json()["receiving"] is True
 
-    rejected = client.post("/api/virtualcam/frame", content=b"not-a-jpeg")
+    untyped = client.post("/api/virtualcam/frame", content=b"not-a-jpeg")
+    assert untyped.status_code == 415
+    rejected = client.post("/api/virtualcam/frame", content=b"not-a-jpeg", headers={"content-type": "image/jpeg"})
     assert rejected.status_code == 400
 
 

@@ -35,11 +35,17 @@ A new interface and a deeper engine. Everything from 2.8 is still here.
 - Closing the source during a recording left the recorder capturing a frozen picture. The clip is now saved.
 - Copilot history flattened earlier replies onto one line. Lists and code now keep their line breaks.
 - In server mode, a still could show results from the previous image when two were opened quickly.
+- A detection still in flight when you switched sources landed on the new source. That caused false zone alerts and diary lines. Results now carry a source generation and stale ones are dropped.
+- Switching away from an engine that was still downloading froze detection until the download finished. A failed model load stopped live detection until the camera was restarted.
+- The status chip stayed on Reconnecting after the socket came back, and the heatmap carried over to the next source.
+- Streamed copilot text containing U+2028 or U+2029 lost pieces, because those characters were treated as line breaks.
 
 ### Security
 - A Content-Security-Policy on every page. Scripts come only from this site and jsDelivr; connections only to the model hosts. This also blocks MediaPipe's usage logging.
 - The local server checks the `Host` header (`ALLOWED_HOSTS`, a DNS-rebinding guard). It sends `nosniff`, `no-referrer`, `DENY` framing, a Permissions-Policy, COOP, and `Cross-Origin-Resource-Policy: same-origin`, so other sites cannot embed the studio feed.
 - Copilot endpoints accept only `application/json` (415 otherwise), cap the body size (413), and allow two calls in flight (429). Keys are never logged or echoed, and xAI requests ask the provider not to store them (`store: false`).
+- Other sites can no longer push frames into the virtual camera. The frame endpoint requires `image/jpeg` and checks `Origin`, and the copilot endpoints refuse foreign origins too.
+- The Host guard understands IPv6 (`[::1]:8000`). `python -m app --host <address>` allows that address, and a page served on any port can open its detection socket.
 
 ### Versions
 - Application **3.0.0** everywhere: `app/__init__.py`, `package.json`, `pyproject.toml`, `static/app.js`, and the asset cache-busting in `index.html`. A test keeps them in step.

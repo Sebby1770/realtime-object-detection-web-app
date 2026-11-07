@@ -547,3 +547,18 @@ def test_history_keeps_line_breaks_but_collapses_spaces() -> None:
     )
     assert turns[1]["content"] == "Here:\n\n- one item\n- two\n\n```\ncode\n```"
     assert turns[2]["content"] == "thanks"
+
+
+def test_sse_lines_split_only_on_cr_lf_and_crlf() -> None:
+    from app.copilot import SSELineSplitter, iter_sse, parse_stream_event
+
+    text = "a b"  # U+2028 inside JSON is legal and must not end the line
+    line = 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"' + text + '"}}'
+    events = list(iter_sse(["event: content_block_delta", line, ""]))
+    assert parse_stream_event("messages", *events[0]) == ("delta", text)
+
+    splitter = SSELineSplitter()
+    out = splitter.push("event: delta\r")
+    out += splitter.push("\ndata: one two\n\ndata: tail")
+    out += splitter.end()
+    assert out == ["event: delta", "data: one two", "", "data: tail"]

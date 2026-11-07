@@ -188,6 +188,10 @@ const state = {
   srText: "",
   srAt: 0,
   tally: "off",
+  // Bumped on every source change; a result tagged with an older generation is dropped.
+  sourceGen: 0,
+  wsFrameGen: -1,
+  stillRun: 0,
 };
 
 const apiUrl = (path) => new URL(path, document.baseURI).toString();
@@ -306,22 +310,36 @@ const engineLoads = new Map();
 function ensureEngine() {
   const engine = activeEngine();
   if (!engine || engine.kind === "server" || engine.ready) {
+    // A download for an engine the user has since switched away from must not keep covering the monitor.
+    if (!engineLoads.has(state.engineId)) {
+      setLoading("");
+    }
     return Promise.resolve(engine);
   }
+  setLoading(`Loading ${engine.short}`);
   if (engineLoads.has(engine.id)) {
     return engineLoads.get(engine.id);
   }
   state.engineLoading = true;
-  setLoading(`Loading ${engine.short}`);
+  const isActive = () => state.engineId === engine.id;
   const load = engine
-    .load((message) => setLoading(message))
+    .load((message) => {
+      if (isActive()) {
+        setLoading(message);
+      }
+    })
     .then(() => {
-      toast.ok(`${engine.short} is ready`);
+      if (isActive()) {
+        toast.ok(`${engine.short} is ready`);
+      }
       return engine;
     })
     .catch((error) => {
+      if (!isActive()) {
+        throw error;
+      }
       const fallback = engineById(FALLBACK_ENGINE_ID);
-      if (engine.id !== fallback.id && state.engineId === engine.id) {
+      if (engine.id !== fallback.id) {
         toast.error(`${engine.short} could not start here (${error.message || "load failed"}). Using ${fallback.short}.`);
         state.engineId = fallback.id;
         updateEngineUi();
@@ -334,7 +352,7 @@ function ensureEngine() {
     .finally(() => {
       engineLoads.delete(engine.id);
       state.engineLoading = engineLoads.size > 0;
-      if (!state.engineLoading) {
+      if (!engineLoads.has(state.engineId)) {
         setLoading("");
       }
     });
@@ -368,6 +386,10 @@ async function selectEngine(id, { user = false } = {}) {
       await ensureEngine().catch(() => {});
     }
   }
+  if (isLive()) {
+    // The loop may have stopped after a failed load; picking a working engine starts it again.
+    scheduleTick(0);
+  }
   if (state.source?.kind === "still") {
     runStill();
   }
@@ -384,11 +406,14 @@ function ensureServerRuntime() {
       if (status === "open") {
         sendDetectionConfig();
       }
-      if (status === "reconnecting" && state.source) {
-        els.hudState.textContent = "Reconnecting";
+      els.hudState.textContent = status === "reconnecting" && state.source ? "Reconnecting" : hudLabel();
+    },
+    onDetections(payload) {
+      // A reply for a frame grabbed before the source changed belongs to the old source.
+      if (state.wsFrameGen === state.sourceGen) {
+        applyDetections(payload);
       }
     },
-    onDetections: applyDetections,
     onError(message, code) {
       if (code === "model_unavailable") {
         state.yoloStatus = "error";
@@ -478,6 +503,7 @@ function resetSourceState() {
   state.zoneCounts = state.rois.map(() => 0);
   state.mask = null;
   state.crop = null;
+  state.heat.fill(0);
   // The plate belongs to one source, and nothing is learned before that source has detections.
   state.plate = null;
   state.detectionsReady = false;
@@ -492,7 +518,18 @@ function resetSourceState() {
   updateStudioChips();
 }
 
+function hudLabel() {
+  if (!state.source) {
+    return "Idle";
+  }
+  if (state.paused) {
+    return "Paused";
+  }
+  return { camera: "Live", synthetic: "Synthetic", still: "Still" }[state.source.kind] || "Live";
+}
+
 function attachSource(source) {
+  state.sourceGen += 1;
   clearTimeout(state.loopTimer);
   state.source = source;
   state.paused = false;
@@ -512,6 +549,7 @@ function attachSource(source) {
 }
 
 function detachSource() {
+  state.sourceGen += 1;
   clearTimeout(state.loopTimer);
   // Finish and save a running clip rather than recording a frozen picture.
   if (state.recorder && state.recorder.state !== "inactive") {
@@ -776,12 +814,9 @@ async function startDetection() {
   if (state.engineId === "server") {
     ensureServerRuntime().connect();
   } else {
-    try {
-      await ensureEngine();
-    } catch {
-      return;
-    }
+    await ensureEngine().catch(() => {});
   }
+  // Always start the loop: tick skips frames until an engine is ready, so a later engine pick resumes it.
   scheduleTick(0);
 }
 
@@ -797,7 +832,7 @@ async function tick() {
     return;
   }
   const started = performance.now();
-  if (!state.paused && !state.inFlight && !state.engineLoading) {
+  if (!state.paused && !state.inFlight) {
     await detectOnce();
   }
   const spent = performance.now() - started;
@@ -809,6 +844,7 @@ async function detectOnce() {
   if (!canvas) {
     return;
   }
+  const gen = state.sourceGen;
   if (state.engineId === "server") {
     const runtime = ensureServerRuntime();
     if (!runtime.isOpen || runtime.busy) {
@@ -817,8 +853,10 @@ async function detectOnce() {
     state.inFlight = true;
     try {
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.75));
-      if (blob && state.engineId === "server") {
-        runtime.sendFrame(await blob.arrayBuffer());
+      const buffer = blob ? await blob.arrayBuffer() : null;
+      if (buffer && state.engineId === "server" && gen === state.sourceGen) {
+        state.wsFrameGen = gen;
+        runtime.sendFrame(buffer);
       }
     } finally {
       state.inFlight = false;
@@ -835,7 +873,7 @@ async function detectOnce() {
       confidence: settings.confidence,
       classes: settings.selectedClasses,
     });
-    if (state.source && engine.id === state.engineId) {
+    if (gen === state.sourceGen && engine.id === state.engineId) {
       applyDetections(payload);
     }
   } catch (error) {
@@ -852,6 +890,10 @@ async function runStill() {
   }
   browserSession.resetTracks();
   glide.reset();
+  const gen = state.sourceGen;
+  const run = ++state.stillRun;
+  // An older check of this still (other engine, other confidence) or of another source must not win.
+  const stale = () => gen !== state.sourceGen || run !== state.stillRun;
   if (state.engineId === "server") {
     const blob = await new Promise((resolve) => still.toBlob(resolve, "image/jpeg", 0.9));
     if (!blob) {
@@ -866,8 +908,8 @@ async function runStill() {
       if (!response.ok) {
         throw new Error(payload.detail || "The server could not check that image.");
       }
-      if (state.source?.element !== still) {
-        return; // another source was opened while this one was being checked
+      if (stale()) {
+        return;
       }
       payload.rtt_ms = Math.round((performance.now() - started) * 10) / 10;
       const wanted = settings.selectedClasses.length ? new Set(settings.selectedClasses) : null;
@@ -887,7 +929,7 @@ async function runStill() {
       confidence: settings.confidence,
       classes: settings.selectedClasses,
     });
-    if (state.source?.element === still) {
+    if (!stale() && engine?.id === state.engineId) {
       applyDetections(payload);
     }
   } catch (error) {
@@ -1650,7 +1692,7 @@ function togglePause() {
   }
   state.paused = !state.paused;
   syncTransport();
-  els.hudState.textContent = state.paused ? "Paused" : state.source.kind === "camera" ? "Live" : "Synthetic";
+  els.hudState.textContent = hudLabel();
   toast.show(state.paused ? "Detection paused" : "Detection running");
 }
 

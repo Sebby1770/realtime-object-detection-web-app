@@ -468,11 +468,47 @@ class SSEParser:
         return pair
 
 
+# SSE lines end only in CR, LF or CRLF. str.splitlines() also breaks on U+2028, U+2029, U+0085 and
+# friends, which a provider may legally leave unescaped inside a JSON string; that would cut a delta in half.
+_SSE_BREAK = re.compile(r"\r\n|\r|\n")
+
+
+def _sse_lines(raw: str) -> list[str]:
+    parts = _SSE_BREAK.split(raw)
+    if len(parts) > 1 and parts[-1] == "":
+        parts.pop()
+    return parts
+
+
+class SSELineSplitter:
+    """Turn arbitrary text chunks into SSE lines, splitting only on CR, LF and CRLF."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+
+    def push(self, text: str) -> list[str]:
+        self._buffer += text
+        lines: list[str] = []
+        while True:
+            match = _SSE_BREAK.search(self._buffer)
+            if match is None:
+                break
+            if match.group() == "\r" and match.end() == len(self._buffer):
+                break  # the \n of a CRLF may still be on its way
+            lines.append(self._buffer[: match.start()])
+            self._buffer = self._buffer[match.end() :]
+        return lines
+
+    def end(self) -> list[str]:
+        tail, self._buffer = self._buffer, ""
+        return [tail.removesuffix("\r")] if tail else []
+
+
 def iter_sse(lines: Iterable[str]) -> Iterator[tuple[str, str]]:
     parser = SSEParser()
     for raw in lines:
         # A chunk may carry several lines; split defensively.
-        for line in raw.splitlines() or [""]:
+        for line in _sse_lines(raw):
             pair = parser.feed(line)
             if pair is not None:
                 yield pair
@@ -484,7 +520,7 @@ def iter_sse(lines: Iterable[str]) -> Iterator[tuple[str, str]]:
 async def aiter_sse(lines: AsyncIterator[str]) -> AsyncIterator[tuple[str, str]]:
     parser = SSEParser()
     async for raw in lines:
-        for line in raw.splitlines() or [""]:
+        for line in _sse_lines(raw):
             pair = parser.feed(line)
             if pair is not None:
                 yield pair
@@ -581,7 +617,11 @@ async def open_provider_stream(
                 if response.status_code >= 400:
                     detail = (await response.aread())[:4000].decode("utf-8", errors="replace")
                     raise http_error(response.status_code, detail, _secret_from(headers), str(body.get("model", "")))
-                async for line in response.aiter_lines():
+                splitter = SSELineSplitter()
+                async for text in response.aiter_text():
+                    for line in splitter.push(text):
+                        yield line
+                for line in splitter.end():
                     yield line
     except httpx.TimeoutException as exc:
         raise CopilotError(504, "The model took too long.") from exc
