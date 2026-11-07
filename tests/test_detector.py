@@ -543,3 +543,18 @@ def test_websocket_reports_model_unavailable(monkeypatch: pytest.MonkeyPatch) ->
         websocket.send_bytes(b"frame-1")
         message = websocket.receive_json()
     assert message == {"type": "error", "code": "model_unavailable", "message": "Ultralytics is not installed."}
+
+
+def test_first_frame_is_never_throttled_on_a_freshly_booted_machine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """perf_counter() counts from boot on Linux; a CI VM can be younger than the throttle interval."""
+    calls: list[int] = []
+    monkeypatch.setattr("app.main.detect_objects", _fake_ws_detect(calls))
+    monkeypatch.setattr(main, "MIN_FRAME_INTERVAL_SECONDS", 60)
+    monkeypatch.setattr(main.time, "perf_counter", lambda: 5.0)
+    client = TestClient(main.app)
+    with client.websocket_connect("/ws/detect", headers={"origin": "http://127.0.0.1:8000"}) as websocket:
+        websocket.send_bytes(b"frame-1")
+        assert websocket.receive_json()["type"] == "detections"
+        websocket.send_bytes(b"frame-2")
+        assert websocket.receive_json()["type"] == "throttled"
+    assert calls == [len(b"frame-1")]

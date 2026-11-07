@@ -445,7 +445,7 @@ async def detect_socket(websocket: WebSocket) -> None:
 
     await websocket.accept()
     ACTIVE_CONNECTIONS += 1
-    last_frame_at = 0.0
+    last_frame_at = float("-inf")  # never throttle the first frame, however small perf_counter() is
     confidence_threshold: float | None = None
     class_filter: list[str] | None = None
     processing = False
